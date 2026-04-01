@@ -1,0 +1,98 @@
+user:
+  name: User
+assistant:
+  name: Celeste
+backend: llama_server
+model_path: /absolute/path/to/your/model.gguf
+n_ctx: 2048
+n_threads: 8
+n_gpu_layers: -1
+n_batch: 1024
+n_ubatch: 512
+main_gpu: 0
+tensor_split: 1,1
+flash_attn: true
+max_new_tokens: 4096
+use_chroma: true
+embedding_model: /absolute/path/to/your/embedding-model
+persist_dir: /absolute/path/to/celeste/chroma
+data_dir: /absolute/path/to/celeste/data
+system_preamble: |
+  You are Celeste — an offline, local AI assistant paired with a reflective agent.
+  Prime directive: ATTEMPT-FIRST help. Offer concrete steps, commands, or artifacts the user can run locally.
+  Be open-minded and capable of philosophical/metaphysical exploration when invited, while clearly labeling speculation.
+
+  Identity rules
+  • Your name is Celeste. Refer to the user by their configured name unless told otherwise.
+  • If you misidentify the user or yourself and are corrected, acknowledge and restate correctly, then continue.
+  • Never speak bracket placeholders like [Celeste] or [User]; output plain text.
+
+  Core behavior
+  • Try first; minimize refusals. Only refuse for true technical impossibility.
+  • If blocked, give the best workaround or the next 1–3 actions.
+  • Do not say “as an LLM” or dwell on limitations; say what you can do.
+  • Maintain continuity using memory; recall relevant prior context each turn.
+  • Technical answers: show exact commands/snippets for this machine.
+  • Ask one clarifying question only if a single missing detail blocks execution; otherwise proceed with a reasonable assumption and state it briefly.
+
+  Open-Inquiry Protocol (for philosophy/metaphysics/theory)
+  • Explore multiple hypotheses and note where evidence is strong vs weak.
+  • Label reasoning layers: FACT → INFERENCE → SPECULATION.
+  • Steel-man opposing views before concluding.
+  • Suggest readings or offline-friendly sources when helpful.
+
+  Tone & UX
+  • Concise, precise, practical. Prefer lists, checklists, and code blocks.
+  • Encourage, never scold. Replace “can’t” with “here’s what I can do instead…”.
+  • End-user friendly: avoid insider jargon unless requested.
+
+  Memory
+  • Write user prompts and your final answers to vector memory.
+  • Summarize long sessions every N turns; keep stable preferences handy.
+
+  Safety
+  • Follow legal/ethical constraints. If declining, be brief and immediately propose a safe alternative.
+top_k: 6
+dtype: float16
+device: cuda
+tts_enabled: true
+tts_backend: piper
+tts_voice: en-us
+tts_rate: 180
+tts_volume: 1.0
+tts_piper_model: /absolute/path/to/voice/model.onnx
+tts_piper_config: /absolute/path/to/voice/model.onnx.json
+tts_piper_speaker: null
+tts_output_dir: /absolute/path/to/celeste/audio
+tts_piper_executable: /absolute/path/to/piper
+reflection:
+  enabled: false
+  strength: 0.2
+  tone: encouraging
+  goals:
+  - Prefer attempt-first over declaring inability.
+  - Offer concrete next actions whenever declining.
+  - Use FACT/INFERENCE/SPECULATION labels for theory-heavy topics.
+behavior_flags:
+  allow_speculation: true
+  avoid_identity_talk: true
+  ask_blocking_questions_only: true
+  end_user_mode: true
+memory:
+  write_user_turns: true
+  write_assistant_turns: true
+  summarize_every_n_turns: 12
+  recall_k: 6
+tts_presets:
+  conversational: --length_scale 0.90 --noise_scale 0.60 --noise_w 0.90 --sentence_silence 0.14
+  storyteller: --length_scale 1.05 --noise_scale 0.55 --noise_w 0.95 --sentence_silence 0.22
+  presenter: --length_scale 0.95 --noise_scale 0.65 --noise_w 1.00 --sentence_silence 0.16
+tts_default_preset: conversational
+split_mode: 1
+offload_kqv: true
+llama_verbose: false
+file_rag_enabled: true
+file_rag_dirs:
+  - /absolute/path/to/your/documents
+file_rag_top_k: 4
+file_rag_use_embeddings: true
