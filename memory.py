@@ -8,6 +8,7 @@ import os
 import hashlib
 import json
 import re
+import time
 import uuid
 from collections import defaultdict
 from typing import List, Dict, Any, Optional
@@ -26,6 +27,9 @@ INDEXABLE_KINDS = {"note", "user"}
 DEFAULT_ENGRAM_NGRAM_MIN = 2
 DEFAULT_ENGRAM_NGRAM_MAX = 4
 DEFAULT_ENGRAM_MAX_POSTINGS = 256
+DEFAULT_ENGRAM_AUTO_PRUNE = True
+DEFAULT_ENGRAM_RETENTION_DAYS = 30
+DEFAULT_ENGRAM_KEEP_MIN_USES = 3
 
 
 class EngramMemory:
@@ -37,16 +41,23 @@ class EngramMemory:
         ngram_min: int = DEFAULT_ENGRAM_NGRAM_MIN,
         ngram_max: int = DEFAULT_ENGRAM_NGRAM_MAX,
         max_postings: int = DEFAULT_ENGRAM_MAX_POSTINGS,
+        auto_prune: bool = DEFAULT_ENGRAM_AUTO_PRUNE,
+        retention_days: int = DEFAULT_ENGRAM_RETENTION_DAYS,
+        keep_min_uses: int = DEFAULT_ENGRAM_KEEP_MIN_USES,
     ):
         self.path = path
         self.enabled = bool(enabled)
         self.ngram_min = max(1, int(ngram_min))
         self.ngram_max = max(self.ngram_min, int(ngram_max))
         self.max_postings = max(16, int(max_postings))
+        self.auto_prune = bool(auto_prune)
+        self.retention_days = max(1, int(retention_days))
+        self.keep_min_uses = max(1, int(keep_min_uses))
         self.entries: List[Dict[str, Any]] = []
         self.postings: dict[str, list[int]] = {}
         if self.enabled:
             self._load()
+            self.auto_prune_stale()
 
     def _normalize_tokens(self, text: str) -> list[str]:
         return re.findall(r"[a-z0-9]+", (text or "").lower())
@@ -80,11 +91,26 @@ class EngramMemory:
         entries = payload.get("entries", [])
         postings = payload.get("postings", {})
         self.entries = [row for row in entries if isinstance(row, dict) and row.get("text")]
+        now = time.time()
+        for row in self.entries:
+            if not isinstance(row.get("created_at"), (int, float)):
+                row["created_at"] = now
+            if not isinstance(row.get("last_accessed_at"), (int, float)):
+                row["last_accessed_at"] = row["created_at"]
+            if not isinstance(row.get("hit_count"), int):
+                try:
+                    row["hit_count"] = int(row.get("hit_count", 0) or 0)
+                except Exception:
+                    row["hit_count"] = 0
+            if not isinstance(row.get("ngrams"), list):
+                row["ngrams"] = sorted(self._entry_ngrams(str(row.get("text", "") or "")))
         self.postings = {
             str(key): [int(v) for v in values if isinstance(v, int) or str(v).isdigit()]
             for key, values in postings.items()
             if isinstance(values, list)
         }
+        if self.entries and not self.postings:
+            self._rebuild_postings()
 
     def _save(self) -> None:
         try:
@@ -92,6 +118,78 @@ class EngramMemory:
                 json.dump({"entries": self.entries, "postings": self.postings}, f)
         except Exception:
             pass
+
+    def _rebuild_postings(self) -> None:
+        self.postings = {}
+        for entry_id, entry in enumerate(self.entries):
+            entry["id"] = entry_id
+            grams = entry.get("ngrams", [])
+            if not isinstance(grams, list):
+                grams = sorted(self._entry_ngrams(str(entry.get("text", "") or "")))
+                entry["ngrams"] = grams
+            for gram_hash in grams:
+                bucket = self.postings.get(str(gram_hash))
+                if bucket is None:
+                    self.postings[str(gram_hash)] = [entry_id]
+                elif not bucket or bucket[-1] != entry_id:
+                    bucket.append(entry_id)
+                    if len(bucket) > self.max_postings:
+                        del bucket[:-self.max_postings]
+
+    def set_auto_prune(self, enabled: bool) -> dict[str, int | bool]:
+        self.auto_prune = bool(enabled)
+        if self.auto_prune:
+            self.auto_prune_stale()
+        return self.stats()
+
+    def stats(self) -> dict[str, int | bool]:
+        return {
+            "enabled": self.enabled,
+            "auto_prune": self.auto_prune,
+            "entries": len(self.entries),
+            "ngrams": len(self.postings),
+            "retention_days": self.retention_days,
+            "keep_min_uses": self.keep_min_uses,
+        }
+
+    def _prune_entries(self, keep_fn) -> int:
+        if not self.enabled:
+            return 0
+        kept = [entry for entry in self.entries if keep_fn(entry)]
+        purged = len(self.entries) - len(kept)
+        if purged <= 0:
+            return 0
+        self.entries = kept
+        self._rebuild_postings()
+        self._save()
+        return purged
+
+    def purge_recent(self, seconds: int | None = None) -> dict[str, int | bool]:
+        if not self.enabled:
+            return {"purged": 0, **self.stats()}
+        if seconds is None or int(seconds) <= 0:
+            purged = len(self.entries)
+            self.entries = []
+            self.postings = {}
+            self._save()
+            return {"purged": purged, **self.stats()}
+        cutoff = time.time() - int(seconds)
+        purged = self._prune_entries(
+            lambda entry: float(entry.get("created_at", time.time())) < cutoff
+        )
+        return {"purged": purged, **self.stats()}
+
+    def auto_prune_stale(self) -> dict[str, int | bool]:
+        if not self.enabled or not self.auto_prune:
+            return {"purged": 0, **self.stats()}
+        cutoff = time.time() - (self.retention_days * 86400)
+        purged = self._prune_entries(
+            lambda entry: (
+                float(entry.get("created_at", time.time())) >= cutoff
+                or int(entry.get("hit_count", 0) or 0) >= self.keep_min_uses
+            )
+        )
+        return {"purged": purged, **self.stats()}
 
     def rebuild(self, rows: list[dict[str, Any]]) -> None:
         if not self.enabled:
@@ -121,6 +219,7 @@ class EngramMemory:
             return
         entry_id = len(self.entries)
         entry_grams = sorted(self._entry_ngrams(clean))
+        now = time.time()
         self.entries.append(
             {
                 "id": entry_id,
@@ -128,6 +227,9 @@ class EngramMemory:
                 "kind": kind,
                 "meta": metadata or {},
                 "ngrams": entry_grams,
+                "created_at": now,
+                "last_accessed_at": now,
+                "hit_count": 0,
             }
         )
         for gram_hash in entry_grams:
@@ -179,6 +281,17 @@ class EngramMemory:
                 }
             )
         ranked.sort(key=lambda row: row["score"], reverse=True)
+        if ranked:
+            now = time.time()
+            selected_texts = {str(row.get("text", "") or "") for row in ranked[: max(1, top_k)]}
+            changed = False
+            for entry in self.entries:
+                if str(entry.get("text", "") or "") in selected_texts:
+                    entry["hit_count"] = int(entry.get("hit_count", 0) or 0) + 1
+                    entry["last_accessed_at"] = now
+                    changed = True
+            if changed:
+                self._save()
         return ranked[: max(1, top_k)]
 
 
@@ -209,6 +322,9 @@ class MemoryPipeline:
             ngram_min=int(memory_cfg.get("engram_ngram_min", DEFAULT_ENGRAM_NGRAM_MIN)),
             ngram_max=int(memory_cfg.get("engram_ngram_max", DEFAULT_ENGRAM_NGRAM_MAX)),
             max_postings=int(memory_cfg.get("engram_max_postings", DEFAULT_ENGRAM_MAX_POSTINGS)),
+            auto_prune=bool(memory_cfg.get("engram_auto_prune", DEFAULT_ENGRAM_AUTO_PRUNE)),
+            retention_days=int(memory_cfg.get("engram_retention_days", DEFAULT_ENGRAM_RETENTION_DAYS)),
+            keep_min_uses=int(memory_cfg.get("engram_keep_min_uses", DEFAULT_ENGRAM_KEEP_MIN_USES)),
         )
 
         # Ensure JSON store exists
@@ -352,3 +468,12 @@ class MemoryPipeline:
 
     def search_engram(self, query: str, top_k: int = 5, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         return self.engram.search(query, top_k=top_k, kinds=kinds)
+
+    def purge_engram(self, seconds: int | None = None) -> dict[str, int | bool]:
+        return self.engram.purge_recent(seconds=seconds)
+
+    def set_engram_auto_prune(self, enabled: bool) -> dict[str, int | bool]:
+        return self.engram.set_auto_prune(enabled)
+
+    def engram_stats(self) -> dict[str, int | bool]:
+        return self.engram.stats()

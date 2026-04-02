@@ -104,6 +104,15 @@ class Agent:
     def reindex_file_rag(self) -> Dict[str, Any]:
         return self.file_rag.rebuild(self.cfg.file_rag_dirs)
 
+    def purge_engram_memory(self, seconds: int | None = None) -> Dict[str, Any]:
+        return self.mem.purge_engram(seconds=seconds)
+
+    def set_engram_auto_prune(self, enabled: bool) -> Dict[str, Any]:
+        memory_cfg = dict((self.cfg.memory or {}) if isinstance(self.cfg.memory, dict) else {})
+        memory_cfg["engram_auto_prune"] = bool(enabled)
+        self.cfg.memory = memory_cfg
+        return self.mem.set_engram_auto_prune(enabled)
+
     def _reflection_enabled(self) -> bool:
         reflection_cfg = getattr(self.cfg, "reflection", {}) or {}
         if isinstance(reflection_cfg, dict):

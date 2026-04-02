@@ -110,3 +110,18 @@ class CelesteService:
         stats = self.agent.file_rag.build_deep_index(progress_cb=progress_cb)
         save_config(self.config_path, self.cfg)
         return self.cfg, stats
+
+    def purge_engram_memory(self, seconds: int | None = None) -> tuple[AgentConfig, dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        stats = self.agent.purge_engram_memory(seconds=seconds)
+        return self.cfg, stats
+
+    def set_engram_auto_prune(self, enabled: bool) -> tuple[AgentConfig, dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        stats = self.agent.set_engram_auto_prune(enabled)
+        save_config(self.config_path, self.cfg)
+        return self.cfg, stats

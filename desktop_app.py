@@ -44,6 +44,7 @@ class ServiceWorker(QObject):
     models_ready = Signal(list)
     reloaded = Signal(object)
     rag_updated = Signal(object, str)
+    memory_updated = Signal(object, str)
     reply_ready = Signal(str, str, str)
     failed = Signal(str)
     status = Signal(str)
@@ -155,6 +156,44 @@ class ServiceWorker(QObject):
     def shutdown(self) -> None:
         self.service.shutdown()
 
+    @Slot(object)
+    def purge_engram_memory(self, seconds: object) -> None:
+        try:
+            purge_seconds = None if seconds is None else int(seconds)
+            if purge_seconds is None:
+                self.status.emit("Purging all Engram memory...")
+            else:
+                self.status.emit("Purging recent Engram memory...")
+            cfg, stats = self.service.purge_engram_memory(seconds=purge_seconds)
+            deleted = int(stats.get("purged", stats.get("entries_deleted", 0)))
+            remaining = int(stats.get("entries", stats.get("entries_remaining", 0)))
+            message = f"Purged {deleted} Engram entries. Remaining Engram entries: {remaining}."
+            self.memory_updated.emit(cfg, message)
+            self.status.emit("Engram memory updated.")
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    @Slot(bool)
+    def set_engram_auto_prune(self, enabled: bool) -> None:
+        try:
+            self.status.emit(
+                "Enabling Engram auto-purge..." if enabled else "Disabling Engram auto-purge..."
+            )
+            cfg, stats = self.service.set_engram_auto_prune(bool(enabled))
+            retention_days = int(stats.get("retention_days", 30))
+            keep_min_uses = int(stats.get("keep_min_uses", 3))
+            if enabled:
+                message = (
+                    f"Engram auto-purge enabled: entries older than {retention_days} days "
+                    f"are pruned unless used at least {keep_min_uses} times."
+                )
+            else:
+                message = "Engram auto-purge disabled."
+            self.memory_updated.emit(cfg, message)
+            self.status.emit("Engram memory settings updated.")
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
 
 class CelesteWindow(QMainWindow):
     initialize_requested = Signal()
@@ -165,6 +204,8 @@ class CelesteWindow(QMainWindow):
     remove_rag_directory_requested = Signal(str)
     reindex_rag_requested = Signal()
     build_deep_index_requested = Signal()
+    purge_engram_requested = Signal(object)
+    set_engram_auto_prune_requested = Signal(bool)
     shutdown_requested = Signal()
 
     def __init__(self, config_path: str):
@@ -229,6 +270,36 @@ class CelesteWindow(QMainWindow):
         form.addRow("Max Tokens", self.tokens_spin)
 
         settings_layout.addLayout(form)
+
+        engram_title = QLabel("Engram Memory")
+        engram_title.setObjectName("panelTitle")
+        settings_layout.addWidget(engram_title)
+
+        engram_subtitle = QLabel(
+            "Purge exact-recall Engram traces manually, or keep auto-purge enabled for stale entries."
+        )
+        engram_subtitle.setWordWrap(True)
+        engram_subtitle.setObjectName("panelSubtitle")
+        settings_layout.addWidget(engram_subtitle)
+
+        self.engram_auto_toggle = QCheckBox(
+            "Auto-purge Engram entries older than 30 days unless frequently used"
+        )
+        settings_layout.addWidget(self.engram_auto_toggle)
+
+        engram_row = QHBoxLayout()
+        engram_row.setSpacing(10)
+        self.engram_purge_combo = QComboBox()
+        self.engram_purge_combo.addItem("Purge all", userData=None)
+        self.engram_purge_combo.addItem("Purge last 24 hours", userData=24 * 60 * 60)
+        self.engram_purge_combo.addItem("Purge last 7 days", userData=7 * 24 * 60 * 60)
+        self.engram_purge_combo.addItem("Purge last 30 days", userData=30 * 24 * 60 * 60)
+        self.engram_purge_combo.addItem("Purge last 90 days", userData=90 * 24 * 60 * 60)
+        self.engram_purge_button = QPushButton("Purge Engrams")
+        self.engram_purge_button.setMinimumHeight(40)
+        engram_row.addWidget(self.engram_purge_combo, 1)
+        engram_row.addWidget(self.engram_purge_button)
+        settings_layout.addLayout(engram_row)
 
         rag_title = QLabel("File RAG")
         rag_title.setObjectName("panelTitle")
@@ -327,6 +398,8 @@ class CelesteWindow(QMainWindow):
         self.remove_directory_button.clicked.connect(self._remove_selected_rag_directory)
         self.reindex_button.clicked.connect(lambda: self.reindex_rag_requested.emit())
         self.build_deep_button.clicked.connect(lambda: self.build_deep_index_requested.emit())
+        self.engram_purge_button.clicked.connect(self._purge_engram_memory)
+        self.engram_auto_toggle.toggled.connect(self._set_engram_auto_prune)
 
         self._set_busy(True, "Starting Celeste...")
         self.setStyleSheet(
@@ -391,12 +464,15 @@ class CelesteWindow(QMainWindow):
         self.remove_rag_directory_requested.connect(self.worker.remove_rag_directory)
         self.reindex_rag_requested.connect(self.worker.reindex_rag)
         self.build_deep_index_requested.connect(self.worker.build_deep_index)
+        self.purge_engram_requested.connect(self.worker.purge_engram_memory)
+        self.set_engram_auto_prune_requested.connect(self.worker.set_engram_auto_prune)
         self.shutdown_requested.connect(self.worker.shutdown)
 
         self.worker.initialized.connect(self._on_initialized)
         self.worker.models_ready.connect(self._on_models_ready)
         self.worker.reloaded.connect(self._on_reloaded)
         self.worker.rag_updated.connect(self._on_rag_updated)
+        self.worker.memory_updated.connect(self._on_memory_updated)
         self.worker.reply_ready.connect(self._on_reply_ready)
         self.worker.failed.connect(self._on_failed)
         self.worker.status.connect(self._set_status)
@@ -412,6 +488,9 @@ class CelesteWindow(QMainWindow):
         self.remove_directory_button.setEnabled(not busy)
         self.reindex_button.setEnabled(not busy)
         self.build_deep_button.setEnabled(not busy)
+        self.engram_auto_toggle.setEnabled(not busy)
+        self.engram_purge_combo.setEnabled(not busy)
+        self.engram_purge_button.setEnabled(not busy)
         if status:
             self.status_label.setText(status)
 
@@ -464,6 +543,14 @@ class CelesteWindow(QMainWindow):
         self._append_system(message)
         self._set_busy(False, "Library index updated.")
 
+    @Slot(object, str)
+    def _on_memory_updated(self, cfg: object, message: str) -> None:
+        self.cfg = cfg if isinstance(cfg, AgentConfig) else self.cfg
+        if self.cfg is not None:
+            self._populate_from_config(self.cfg)
+        self._append_system(message)
+        self._set_busy(False, "Engram memory updated.")
+
     @Slot(str, str, str)
     def _on_reply_ready(self, answer: str, critique: str, improvements: str) -> None:
         self._append_chat("Celeste", answer, "#a8ffcf", split_sources=True)
@@ -486,6 +573,10 @@ class CelesteWindow(QMainWindow):
         reflection_cfg = cfg.reflection or {}
         self.reflection_toggle.setChecked(bool(reflection_cfg.get("enabled", False)))
         self.tokens_spin.setValue(int(cfg.max_new_tokens))
+        memory_cfg = dict(cfg.memory or {})
+        self.engram_auto_toggle.blockSignals(True)
+        self.engram_auto_toggle.setChecked(bool(memory_cfg.get("engram_auto_prune", True)))
+        self.engram_auto_toggle.blockSignals(False)
         self.rag_dirs_list.clear()
         for path in cfg.file_rag_dirs:
             self.rag_dirs_list.addItem(path)
@@ -591,15 +682,41 @@ class CelesteWindow(QMainWindow):
             return
         reflection = dict((self.cfg.reflection if self.cfg is not None else {}) or {})
         reflection["enabled"] = self.reflection_toggle.isChecked()
+        memory_cfg = dict((self.cfg.memory if self.cfg is not None else {}) or {})
+        memory_cfg["engram_auto_prune"] = self.engram_auto_toggle.isChecked()
         overrides = {
             "model_path": self._selected_model_path(),
             "tts_enabled": self.tts_toggle.isChecked(),
             "use_chroma": self.memory_toggle.isChecked(),
             "max_new_tokens": int(self.tokens_spin.value()),
             "reflection": reflection,
+            "memory": memory_cfg,
         }
         self._set_busy(True, "Applying settings...")
         self.reload_requested.emit(overrides, True)
+
+    def _set_engram_auto_prune(self, enabled: bool) -> None:
+        if self.busy:
+            return
+        self._set_busy(True, "Updating Engram auto-purge...")
+        self.set_engram_auto_prune_requested.emit(bool(enabled))
+
+    def _purge_engram_memory(self) -> None:
+        if self.busy:
+            return
+        seconds = self.engram_purge_combo.currentData()
+        label = self.engram_purge_combo.currentText().strip() or "this Engram range"
+        reply = QMessageBox.question(
+            self,
+            "Purge Engram Memory",
+            f"Proceed with: {label}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._set_busy(True, "Purging Engram memory...")
+        self.purge_engram_requested.emit(seconds)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.shutdown_requested.emit()

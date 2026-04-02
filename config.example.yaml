@@ -63,7 +63,7 @@ tts_volume: 1.0
 tts_piper_model: /absolute/path/to/voice/model.onnx
 tts_piper_config: /absolute/path/to/voice/model.onnx.json
 tts_piper_speaker: null
-tts_output_dir: /absolute/path/to/celeste/audio
+tts_output_dir: null  # Legacy field; current Piper TTS uses temporary WAVs and deletes them after playback.
 tts_piper_executable: /absolute/path/to/piper
 reflection:
   enabled: false
@@ -87,6 +87,9 @@ memory:
   engram_ngram_min: 2
   engram_ngram_max: 4
   engram_max_postings: 256
+  engram_auto_prune: true
+  engram_retention_days: 30
+  engram_keep_min_uses: 3
 tts_presets:
   conversational: --length_scale 0.90 --noise_scale 0.60 --noise_w 0.90 --sentence_silence 0.14
   storyteller: --length_scale 1.05 --noise_scale 0.55 --noise_w 0.95 --sentence_silence 0.22
