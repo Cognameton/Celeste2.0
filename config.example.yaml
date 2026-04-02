@@ -4,7 +4,7 @@ assistant:
   name: Celeste
 backend: llama_server
 model_path: /absolute/path/to/your/model.gguf
-n_ctx: 2048
+n_ctx: 4096
 n_threads: 8
 n_gpu_layers: -1
 n_batch: 1024
@@ -83,6 +83,10 @@ memory:
   write_assistant_turns: true
   summarize_every_n_turns: 12
   recall_k: 6
+  engram_enabled: true
+  engram_ngram_min: 2
+  engram_ngram_max: 4
+  engram_max_postings: 256
 tts_presets:
   conversational: --length_scale 0.90 --noise_scale 0.60 --noise_w 0.90 --sentence_silence 0.14
   storyteller: --length_scale 1.05 --noise_scale 0.55 --noise_w 0.95 --sentence_silence 0.22

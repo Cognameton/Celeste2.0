@@ -5,8 +5,11 @@
 # - JSON log fallback + TF-IDF retrieval when vector DB unavailable
 
 import os
+import hashlib
 import json
+import re
 import uuid
+from collections import defaultdict
 from typing import List, Dict, Any, Optional
 
 import numpy as np
@@ -20,6 +23,163 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Only these kinds are stored in the vector DB
 INDEXABLE_KINDS = {"note", "user"}
+DEFAULT_ENGRAM_NGRAM_MIN = 2
+DEFAULT_ENGRAM_NGRAM_MAX = 4
+DEFAULT_ENGRAM_MAX_POSTINGS = 256
+
+
+class EngramMemory:
+    def __init__(
+        self,
+        path: str,
+        *,
+        enabled: bool = True,
+        ngram_min: int = DEFAULT_ENGRAM_NGRAM_MIN,
+        ngram_max: int = DEFAULT_ENGRAM_NGRAM_MAX,
+        max_postings: int = DEFAULT_ENGRAM_MAX_POSTINGS,
+    ):
+        self.path = path
+        self.enabled = bool(enabled)
+        self.ngram_min = max(1, int(ngram_min))
+        self.ngram_max = max(self.ngram_min, int(ngram_max))
+        self.max_postings = max(16, int(max_postings))
+        self.entries: List[Dict[str, Any]] = []
+        self.postings: dict[str, list[int]] = {}
+        if self.enabled:
+            self._load()
+
+    def _normalize_tokens(self, text: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+    def _hash_ngram(self, gram: tuple[str, ...]) -> str:
+        raw = "\x1f".join(gram).encode("utf-8", errors="ignore")
+        return hashlib.blake2b(raw, digest_size=8).hexdigest()
+
+    def _entry_ngrams(self, text: str) -> set[str]:
+        tokens = self._normalize_tokens(text)
+        grams: set[str] = set()
+        for n in range(self.ngram_min, self.ngram_max + 1):
+            if len(tokens) < n:
+                continue
+            for idx in range(0, len(tokens) - n + 1):
+                grams.add(self._hash_ngram(tuple(tokens[idx : idx + n])))
+        return grams
+
+    def _load(self) -> None:
+        if not os.path.exists(self.path):
+            self.entries = []
+            self.postings = {}
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+        except Exception:
+            self.entries = []
+            self.postings = {}
+            return
+        entries = payload.get("entries", [])
+        postings = payload.get("postings", {})
+        self.entries = [row for row in entries if isinstance(row, dict) and row.get("text")]
+        self.postings = {
+            str(key): [int(v) for v in values if isinstance(v, int) or str(v).isdigit()]
+            for key, values in postings.items()
+            if isinstance(values, list)
+        }
+
+    def _save(self) -> None:
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump({"entries": self.entries, "postings": self.postings}, f)
+        except Exception:
+            pass
+
+    def rebuild(self, rows: list[dict[str, Any]]) -> None:
+        if not self.enabled:
+            return
+        self.entries = []
+        self.postings = {}
+        for row in rows:
+            text = str(row.get("text", "") or "").strip()
+            kind = str(row.get("kind", "") or "").strip()
+            meta = row.get("meta", {}) if isinstance(row.get("meta", {}), dict) else {}
+            if text and kind in INDEXABLE_KINDS:
+                self.add(text, kind=kind, metadata=meta, save=False)
+        self._save()
+
+    def add(
+        self,
+        text: str,
+        *,
+        kind: str = "note",
+        metadata: Optional[Dict[str, Any]] = None,
+        save: bool = True,
+    ) -> None:
+        if not self.enabled or kind not in INDEXABLE_KINDS:
+            return
+        clean = (text or "").strip()
+        if not clean:
+            return
+        entry_id = len(self.entries)
+        entry_grams = sorted(self._entry_ngrams(clean))
+        self.entries.append(
+            {
+                "id": entry_id,
+                "text": clean,
+                "kind": kind,
+                "meta": metadata or {},
+                "ngrams": entry_grams,
+            }
+        )
+        for gram_hash in entry_grams:
+            bucket = self.postings.get(gram_hash)
+            if bucket is None:
+                self.postings[gram_hash] = [entry_id]
+            elif not bucket or bucket[-1] != entry_id:
+                bucket.append(entry_id)
+                if len(bucket) > self.max_postings:
+                    del bucket[:-self.max_postings]
+        if save:
+            self._save()
+
+    def search(self, query: str, *, top_k: int = 5, kinds: Optional[List[str]] = None) -> list[dict[str, Any]]:
+        if not self.enabled or not self.entries:
+            return []
+        allowed_kinds = set(kinds or INDEXABLE_KINDS)
+        query_grams = self._entry_ngrams(query)
+        if not query_grams:
+            return []
+
+        hit_counts: dict[int, float] = defaultdict(float)
+        for gram_hash in query_grams:
+            for entry_id in self.postings.get(gram_hash, [])[-self.max_postings :]:
+                hit_counts[int(entry_id)] += 1.0
+
+        ranked: list[dict[str, Any]] = []
+        query_norm = max(1.0, float(len(query_grams)))
+        for entry_id, hits in hit_counts.items():
+            if entry_id < 0 or entry_id >= len(self.entries):
+                continue
+            entry = self.entries[entry_id]
+            kind = str(entry.get("kind", "") or "")
+            if allowed_kinds and kind not in allowed_kinds:
+                continue
+            denom = (query_norm * max(1.0, float(len(entry.get("ngrams", []))))) ** 0.5
+            score = float(hits / denom)
+            if score <= 0.0:
+                continue
+            ranked.append(
+                {
+                    "text": entry.get("text", ""),
+                    "score": score,
+                    "meta": {
+                        **(entry.get("meta", {}) if isinstance(entry.get("meta", {}), dict) else {}),
+                        "kind": kind,
+                        "memory_channel": "engram",
+                    },
+                }
+            )
+        ranked.sort(key=lambda row: row["score"], reverse=True)
+        return ranked[: max(1, top_k)]
 
 
 class MemoryPipeline:
@@ -29,6 +189,7 @@ class MemoryPipeline:
         # Paths
         os.makedirs(self.cfg.data_dir, exist_ok=True)
         self.json_path = os.path.join(self.cfg.data_dir, "memory.json")
+        self.engram_path = os.path.join(self.cfg.data_dir, "memory_engram.json")
         if getattr(self.cfg, "use_chroma", False):
             os.makedirs(getattr(self.cfg, "persist_dir", self.cfg.data_dir), exist_ok=True)
 
@@ -39,11 +200,29 @@ class MemoryPipeline:
         self.embedder = None
         self.dim: Optional[int] = None
         self.device = "cpu"
+        memory_cfg = getattr(self.cfg, "memory", {}) or {}
+        if not isinstance(memory_cfg, dict):
+            memory_cfg = {}
+        self.engram = EngramMemory(
+            self.engram_path,
+            enabled=bool(memory_cfg.get("engram_enabled", True)),
+            ngram_min=int(memory_cfg.get("engram_ngram_min", DEFAULT_ENGRAM_NGRAM_MIN)),
+            ngram_max=int(memory_cfg.get("engram_ngram_max", DEFAULT_ENGRAM_NGRAM_MAX)),
+            max_postings=int(memory_cfg.get("engram_max_postings", DEFAULT_ENGRAM_MAX_POSTINGS)),
+        )
 
         # Ensure JSON store exists
         if not os.path.exists(self.json_path):
             with open(self.json_path, "w", encoding="utf-8") as f:
                 json.dump([], f)
+        if self.engram.enabled and not os.path.exists(self.engram_path):
+            try:
+                with open(self.json_path, "r", encoding="utf-8") as f:
+                    rows = json.load(f)
+            except Exception:
+                rows = []
+            if isinstance(rows, list):
+                self.engram.rebuild(rows)
 
         # Vector store + embedder
         if getattr(self.cfg, "use_chroma", False):
@@ -105,6 +284,7 @@ class MemoryPipeline:
 
         # Always log to JSON for transparency/audit
         self._append_json(text, kind, metadata)
+        self.engram.add(text, kind=kind, metadata=metadata)
 
         # Index selected kinds in vector DB
         if self.use_chroma and self.embedder is not None and self.collection is not None:
@@ -169,3 +349,6 @@ class MemoryPipeline:
         for i in idxs:
             out.append({"text": texts[i], "score": float(sims[i]), "meta": data[i].get("meta", {})})
         return out
+
+    def search_engram(self, query: str, top_k: int = 5, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        return self.engram.search(query, top_k=top_k, kinds=kinds)

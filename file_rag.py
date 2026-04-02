@@ -29,6 +29,19 @@ FILE_RAG_INDEX_KIND_TFIDF = "tfidf"
 FILE_RAG_INDEX_KIND_SEMANTIC = "semantic"
 FILE_RAG_SEMANTIC_BATCH_SIZE = 64
 FILE_RAG_RRF_K = 60.0
+FILE_RAG_MIN_LEXICAL_SCORE = 0.07
+FILE_RAG_MIN_SEMANTIC_SCORE = 0.24
+FILE_RAG_BROAD_MIN_LEXICAL_SCORE = 0.11
+FILE_RAG_BROAD_MIN_SEMANTIC_SCORE = 0.30
+FILE_RAG_QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "bank", "be", "by", "can", "cofc", "cover",
+    "describe", "describes", "did", "do", "does", "for", "from", "give", "had",
+    "has", "have", "hereafter", "how", "if", "in", "index", "information", "into",
+    "is", "it", "its", "library", "me", "most", "number", "of", "on", "or", "over",
+    "provide", "published", "reply", "say", "source", "sources", "talk", "tell",
+    "that", "the", "their", "this", "through", "to", "topic", "was", "what",
+    "when", "where", "which", "with", "you", "your",
+}
 
 
 class FileRAG:
@@ -194,6 +207,8 @@ class FileRAG:
         lexical_hits: list[dict[str, Any]],
         semantic_hits: list[dict[str, Any]],
         top_k: int,
+        *,
+        query: str = "",
     ) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}
 
@@ -227,10 +242,27 @@ class FileRAG:
         add_hits(lexical_hits, FILE_RAG_INDEX_KIND_TFIDF)
         add_hits(semantic_hits, FILE_RAG_INDEX_KIND_SEMANTIC)
         finalize_scores(merged)
+        broad_query = self._is_broad_library_query(query)
+        lexical_threshold = (
+            FILE_RAG_BROAD_MIN_LEXICAL_SCORE if broad_query else FILE_RAG_MIN_LEXICAL_SCORE
+        )
+        semantic_threshold = (
+            FILE_RAG_BROAD_MIN_SEMANTIC_SCORE if broad_query else FILE_RAG_MIN_SEMANTIC_SCORE
+        )
 
         ranked = sorted(
-            merged.values(),
+            (
+                item
+                for item in merged.values()
+                if self._passes_merge_threshold(
+                    item,
+                    broad_query=broad_query,
+                    lexical_threshold=lexical_threshold,
+                    semantic_threshold=semantic_threshold,
+                )
+            ),
             key=lambda item: (
+                len(item.get("retrieval_sources", [])),
                 float(item.get("rrf_score", 0.0)),
                 float(item.get("semantic_score") or -1.0),
                 float(item.get("lexical_score") or -1.0),
@@ -240,16 +272,77 @@ class FileRAG:
 
         selected: list[dict[str, Any]] = []
         per_path_counts: dict[str, int] = {}
+        per_doc_counts: dict[str, int] = {}
+        per_doc_limit = 1 if broad_query else 2
         for item in ranked:
             path = str(item.get("path", ""))
+            doc_key = str(item.get("doc_id") or path)
             count = per_path_counts.get(path, 0)
             if count >= 2:
                 continue
+            doc_count = per_doc_counts.get(doc_key, 0)
+            if doc_count >= per_doc_limit:
+                continue
             per_path_counts[path] = count + 1
+            per_doc_counts[doc_key] = doc_count + 1
             selected.append(item)
             if len(selected) >= top_k:
                 break
         return selected
+
+    def _query_terms(self, query: str) -> list[str]:
+        return [
+            token
+            for token in self._normalize_text(query).split()
+            if len(token) > 2 and token not in FILE_RAG_QUERY_STOPWORDS
+        ]
+
+    def _is_broad_library_query(self, query: str) -> bool:
+        q = (query or "").lower()
+        if not q:
+            return False
+        broad_cues = (
+            "using the indexed",
+            "from the indexed",
+            "using the library",
+            "from the library",
+            "indexed library",
+            "indexed documents",
+            "indexed files",
+            "talk to me about",
+            "what can you tell me about",
+            "what does",
+            "summarize",
+            "summary",
+            "explain",
+            "search the indexed library",
+        )
+        if any(cue in q for cue in broad_cues):
+            return True
+        return len(self._query_terms(query)) >= 3
+
+    def _passes_merge_threshold(
+        self,
+        hit: dict[str, Any],
+        *,
+        broad_query: bool,
+        lexical_threshold: float,
+        semantic_threshold: float,
+    ) -> bool:
+        lexical_score = float(hit.get("lexical_score") or 0.0)
+        semantic_score = float(hit.get("semantic_score") or 0.0)
+        retrieval_sources = set(hit.get("retrieval_sources") or [])
+        has_strong_lexical = lexical_score >= lexical_threshold
+        has_strong_semantic = semantic_score >= semantic_threshold
+        if has_strong_semantic:
+            return True
+        if has_strong_lexical and semantic_score >= semantic_threshold - 0.04:
+            return True
+        if not broad_query and has_strong_lexical and FILE_RAG_INDEX_KIND_SEMANTIC not in retrieval_sources:
+            return lexical_score >= lexical_threshold + 0.03
+        if FILE_RAG_INDEX_KIND_SEMANTIC in retrieval_sources and semantic_score >= semantic_threshold - 0.02:
+            return True
+        return False
 
     def _current_signature(self) -> str:
         return self._catalog_signature(self.files)
@@ -280,6 +373,12 @@ class FileRAG:
             r"\bfrom\s+the\s+indexed\s+(documents|files)\b",
             r"\byou\s+have\s+access\s+to\b",
             r"^\s*(talk to me about|tell me about|explain|give me an overview of)\s+",
+            r"\bblend\s+what\s+you\s+find\s+with\s+your\s+general\s+knowledge\b",
+            r"\bwith\s+citation[s]?\b",
+            r"\bcite\s+(your|the)?\s*sources\b",
+            r"\busing\s+only\s+the\s+indexed\s+library\b",
+            r"\bgive\s+me\s+a\s+(practical|concise|fuller)\s+summary\b",
+            r"\bsummarize\s+the\s+findings\b",
         ]
         for pattern in patterns:
             text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
@@ -302,12 +401,17 @@ class FileRAG:
         for pattern in patterns:
             for match in re.findall(pattern, raw):
                 norm = self._normalize_text(match)
-                if norm and norm not in seen:
+                if (
+                    norm
+                    and norm not in seen
+                    and norm not in FILE_RAG_QUERY_STOPWORDS
+                    and len(norm) > 2
+                ):
                     seen.add(norm)
                     candidates.append(norm)
 
         full_norm = self._normalize_text(raw)
-        if full_norm and full_norm not in seen:
+        if full_norm and full_norm not in seen and full_norm not in FILE_RAG_QUERY_STOPWORDS:
             candidates.append(full_norm)
         return candidates
 
@@ -431,6 +535,22 @@ class FileRAG:
         if self._semantic_enabled():
             return os.path.isfile(self.deep_embeddings_path)
         return True
+
+    def deep_index_stats(self) -> dict[str, Any]:
+        meta = self._deep_meta() or {}
+        if not meta:
+            return {
+                "catalog_documents": len(self.files),
+                "deep_documents": 0,
+                "chunks_indexed": 0,
+                "deep_index_ready": False,
+            }
+        return {
+            "catalog_documents": len(self.files),
+            "deep_documents": int(meta.get("files_indexed", 0) or 0),
+            "chunks_indexed": int(meta.get("chunks_indexed", 0) or 0),
+            "deep_index_ready": self.deep_index_available(),
+        }
 
     def rebuild(self, directories: list[str] | None = None) -> dict[str, Any]:
         target_dirs = self._normalize_dirs(self.directories if directories is None else directories)
@@ -775,9 +895,14 @@ class FileRAG:
         idxs = sims.argsort()[::-1][: max(8, top_k * 2)]
         out: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
+        min_score = (
+            FILE_RAG_BROAD_MIN_LEXICAL_SCORE
+            if self._is_broad_library_query(query)
+            else FILE_RAG_MIN_LEXICAL_SCORE
+        )
         for i in idxs:
             score = float(sims[i])
-            if score < 0.06:
+            if score < min_score:
                 continue
             chunk = self._deep_chunks[int(i)]
             path = chunk["path"]
@@ -797,9 +922,14 @@ class FileRAG:
         idxs = sims.argsort()[::-1][: max(12, top_k * 4)]
         out: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
+        min_score = (
+            FILE_RAG_BROAD_MIN_SEMANTIC_SCORE
+            if self._is_broad_library_query(query)
+            else FILE_RAG_MIN_SEMANTIC_SCORE
+        )
         for i in idxs:
             score = float(sims[int(i)])
-            if score < 0.22:
+            if score < min_score:
                 continue
             chunk = self._deep_chunks[int(i)]
             path = chunk["path"]
@@ -819,7 +949,7 @@ class FileRAG:
         lexical_hits = self._search_deep_lexical(effective_query, top_k=max(top_k, 4))
         if self._semantic_enabled() and self._deep_embedding_matrix is not None:
             semantic_hits = self._search_deep_semantic(effective_query, top_k=max(top_k, 4))
-            return self._merge_ranked_hits(lexical_hits, semantic_hits, top_k=top_k)
+            return self._merge_ranked_hits(lexical_hits, semantic_hits, top_k=top_k, query=effective_query)
         return lexical_hits[:top_k]
 
     def search_document_titles(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
@@ -859,6 +989,7 @@ class FileRAG:
         if not matches:
             return False
         top_score = float(matches[0].get("score", 0.0))
+        second_score = float(matches[1].get("score", 0.0)) if len(matches) > 1 else -1.0
         q = query.lower()
         content_cues = (
             "summar", "what does", "what is in", "contents", "chapter", "quote",
@@ -876,9 +1007,11 @@ class FileRAG:
         )
         if any(cue in q for cue in library_cues):
             return top_score >= 10.0 and any(cue in q for cue in content_cues)
-        if top_score >= 8.0:
+        if top_score >= 10.0:
             return True
-        return any(cue in q for cue in content_cues)
+        if top_score >= 8.0:
+            return second_score < 8.0 and (top_score - second_score) >= 1.0
+        return any(cue in q for cue in content_cues) and top_score >= 3.0 and (top_score - second_score) >= 1.0
 
     def get_context(self, query: str, top_k: Optional[int] = None) -> dict[str, Any]:
         effective_query = self._normalize_query_for_retrieval(query)
