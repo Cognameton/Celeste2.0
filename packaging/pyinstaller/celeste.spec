@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_all
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 
-datas = [("config.example.yaml", ".")]
+datas = [(str(PROJECT_ROOT / "config.example.yaml"), ".")]
 binaries = []
 hiddenimports = []
 
