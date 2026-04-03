@@ -1,5 +1,6 @@
 # model_runner.py — llama.cpp runtime with adaptive kwargs filtering
 from typing import Optional, List, Any, Dict, Iterator, Callable
+from app_paths import runtime_root
 from config_types import AgentConfig
 import atexit
 import inspect
@@ -12,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = runtime_root()
 HOME_DIR = os.path.expanduser("~")
 _LLAMA_CPP_LIB_CANDIDATES = [
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "libllama.so"),

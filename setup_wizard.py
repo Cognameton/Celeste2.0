@@ -32,15 +32,16 @@ except ImportError as exc:  # pragma: no cover - runtime dependency
         "  pip install -r requirements.txt"
     ) from exc
 
+from app_paths import default_config_path, resource_path, runtime_root
 from validate_environment import format_checks, has_errors, validate_config_file
 
 
 def _project_root() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    return runtime_root()
 
 
 def _template_path() -> str:
-    return os.path.join(_project_root(), "config.example.yaml")
+    return resource_path("config.example.yaml")
 
 
 def _default_paths() -> dict[str, str]:
@@ -270,7 +271,11 @@ def ensure_config_with_wizard(config_path: str, *, app: QApplication | None = No
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create a Celeste config.yaml with a first-run setup wizard.")
-    parser.add_argument("--config", default="config.yaml", help="Path where config.yaml should be written.")
+    parser.add_argument(
+        "--config",
+        default=default_config_path(),
+        help="Path where config.yaml should be written.",
+    )
     parser.add_argument(
         "--force",
         action="store_true",

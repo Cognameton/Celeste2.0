@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+if [ ! -d ".venv" ]; then
+  python3 -m venv .venv
+fi
+
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-build.txt
+
+LLAMA_SERVER="$PROJECT_ROOT/vendor/llama.cpp/build/bin/llama-server"
+if [ ! -x "$LLAMA_SERVER" ]; then
+  echo "Missing $LLAMA_SERVER. Build llama.cpp first, then rerun this packager." >&2
+  exit 1
+fi
+
+rm -rf "$PROJECT_ROOT/dist/Celeste" "$PROJECT_ROOT/build/Celeste"
+python -m PyInstaller packaging/pyinstaller/celeste.spec --noconfirm --clean
+
+mkdir -p "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin"
+cp -f "$LLAMA_SERVER" "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/llama-server"
+chmod +x "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/llama-server"
+
+mkdir -p "$PROJECT_ROOT/dist/packages"
+tar -C "$PROJECT_ROOT/dist" -czf "$PROJECT_ROOT/dist/packages/Celeste-linux-x86_64.tar.gz" Celeste
+
+if command -v appimagetool >/dev/null 2>&1; then
+  APPDIR="$PROJECT_ROOT/dist/Celeste.AppDir"
+  rm -rf "$APPDIR"
+  mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
+  cp -a "$PROJECT_ROOT/dist/Celeste/." "$APPDIR/usr/bin/"
+  cat > "$APPDIR/AppRun" <<'SH'
+#!/usr/bin/env bash
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$HERE/usr/bin/Celeste" "$@"
+SH
+  chmod +x "$APPDIR/AppRun"
+  cat > "$APPDIR/Celeste.desktop" <<'DESKTOP'
+[Desktop Entry]
+Name=Celeste
+Exec=Celeste
+Type=Application
+Categories=Utility;
+DESKTOP
+  cp "$APPDIR/Celeste.desktop" "$APPDIR/usr/share/applications/Celeste.desktop"
+  appimagetool "$APPDIR" "$PROJECT_ROOT/dist/packages/Celeste-x86_64.AppImage"
+else
+  echo "appimagetool not found. Generated dist/packages/Celeste-linux-x86_64.tar.gz, but skipped AppImage creation."
+fi

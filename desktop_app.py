@@ -37,6 +37,7 @@ except ImportError as exc:  # pragma: no cover - runtime dependency
 
 from app_service import CelesteService
 from config_types import AgentConfig
+from app_paths import default_config_path
 
 
 class ServiceWorker(QObject):
@@ -735,7 +736,7 @@ class CelesteWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    config_path = default_config_path()
     if not os.path.exists(config_path):
         from setup_wizard import ensure_config_with_wizard
 
