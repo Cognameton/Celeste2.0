@@ -5,6 +5,7 @@ import atexit
 import inspect
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -14,6 +15,8 @@ import urllib.request
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 HOME_DIR = os.path.expanduser("~")
 _LLAMA_CPP_LIB_CANDIDATES = [
+    os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "libllama.so"),
+    os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "src", "libllama.so"),
     "/home/head-node/Dev/ai-lab/llama.cpp/build/bin/libllama.so",
     "/home/head-node/ai-lab/llama.cpp/build/bin/libllama.so",
 ]
@@ -21,6 +24,9 @@ _LLAMA_CPP_BIN_DIR_CANDIDATES = [
     os.path.dirname(path) for path in _LLAMA_CPP_LIB_CANDIDATES
 ]
 _LLAMA_SERVER_CANDIDATES = [
+    os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "llama-server"),
+    os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "Release", "llama-server.exe"),
+    os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "llama-server.exe"),
     "/home/head-node/Dev/ai-lab/llama.cpp/build/bin/llama-server",
     "/home/head-node/ai-lab/llama.cpp/build/bin/llama-server",
 ]
@@ -105,6 +111,36 @@ def resolve_model_path(model_path: str, base_dir: str | None = None) -> str:
         return matches[0]
 
     raise FileNotFoundError(normalized)
+
+
+def discover_llama_server_candidates(cfg: AgentConfig | None = None) -> List[str]:
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    if cfg is not None:
+        configured = (getattr(cfg, "llama_server_executable", None) or "").strip()
+        if configured:
+            candidates.append(normalize_path(configured, base_dir=PROJECT_ROOT))
+
+    for path in _LLAMA_SERVER_CANDIDATES:
+        candidates.append(path)
+
+    which_path = shutil.which("llama-server") or shutil.which("llama-server.exe")
+    if which_path:
+        candidates.append(which_path)
+
+    out: List[str] = []
+    for path in candidates:
+        normalized = os.path.abspath(os.path.expandvars(os.path.expanduser(str(path))))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def resolve_llama_server_executable(cfg: AgentConfig | None = None) -> str | None:
+    return next((path for path in discover_llama_server_candidates(cfg) if os.path.isfile(path)), None)
 
 class LLMRunner:
     def __init__(self, cfg: AgentConfig, status_cb: Callable[[str], None] | None = None):
@@ -191,7 +227,7 @@ class LLMRunner:
         self.backend = "llama_cpp"
 
     def _has_llama_server(self) -> bool:
-        return any(os.path.isfile(path) for path in _LLAMA_SERVER_CANDIDATES)
+        return resolve_llama_server_executable(self.cfg) is not None
 
     def _split_mode_name(self) -> str:
         split_mode_map = {0: "none", 1: "layer", 2: "row"}
@@ -362,7 +398,7 @@ class LLMRunner:
     def _init_llama_server(self, prior_error: Exception | None = None):
         model_path = resolve_model_path(self.cfg.model_path, base_dir=PROJECT_ROOT)
         self.cfg.model_path = model_path
-        server_bin = next((path for path in _LLAMA_SERVER_CANDIDATES if os.path.isfile(path)), None)
+        server_bin = resolve_llama_server_executable(self.cfg)
         if not server_bin:
             if prior_error:
                 raise prior_error

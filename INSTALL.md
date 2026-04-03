@@ -9,6 +9,28 @@
 
 Celeste does not ship with models. You point it at your own local files in `config.yaml`.
 
+## Quick Bootstrap
+
+Linux:
+
+```bash
+git clone https://github.com/Cognameton/Celeste.git
+cd Celeste
+./scripts/bootstrap_linux.sh
+```
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/Cognameton/Celeste.git
+cd Celeste
+.\scripts\bootstrap_windows.ps1
+```
+
+If `config.yaml` does not exist, a first-run wizard opens so you can use Celeste default folders or browse to your own model, embedding, document, and data paths.
+
+## Manual Setup
+
 ## 1. Clone The Repo
 
 ```bash
@@ -44,6 +66,7 @@ Edit `config.yaml` and set:
 - `data_dir`
 - `file_rag_dirs`
 - Piper paths if you want TTS
+- `llama_server_executable` if your `llama-server` binary is not in `vendor/llama.cpp` or `PATH`
 
 Important:
 - `config.yaml` is machine-specific and is intentionally not tracked by git.
@@ -64,6 +87,8 @@ Desktop UI:
 ```bash
 python desktop_app.py
 ```
+
+If `config.yaml` is missing, the setup wizard opens automatically.
 
 CLI mode:
 

@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 
 .codex
+vendor/
 
 config.yaml
 *.gguf

@@ -23,6 +23,7 @@ class AgentConfig(BaseModel):
     flash_attn: bool = False
     offload_kqv: bool = True
     llama_verbose: bool = False
+    llama_server_executable: str | None = None
 
     # Memory / persistence
     embedding_model: str = "intfloat/e5-small-v2"   # local path or name

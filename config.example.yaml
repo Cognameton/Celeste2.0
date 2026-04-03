@@ -98,6 +98,7 @@ tts_default_preset: conversational
 split_mode: 1
 offload_kqv: true
 llama_verbose: false
+llama_server_executable: /absolute/path/to/llama-server
 file_rag_enabled: true
 file_rag_dirs:
   - /absolute/path/to/your/documents

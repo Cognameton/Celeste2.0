@@ -232,8 +232,8 @@ class CelesteWindow(QMainWindow):
         settings_card.setMinimumWidth(120)
         settings_card.setMaximumWidth(420)
         settings_layout = QVBoxLayout(settings_card)
-        settings_layout.setContentsMargins(18, 18, 18, 18)
-        settings_layout.setSpacing(14)
+        settings_layout.setContentsMargins(14, 14, 14, 14)
+        settings_layout.setSpacing(10)
 
         title = QLabel("Control Deck")
         title.setObjectName("panelTitle")
@@ -247,12 +247,14 @@ class CelesteWindow(QMainWindow):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft)
         form.setFormAlignment(Qt.AlignTop)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(12)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(8)
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         self.model_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.model_combo.setMinimumHeight(32)
         form.addRow("LLM Model", self.model_combo)
 
         self.tts_toggle = QCheckBox("Enable Piper speech")
@@ -267,6 +269,7 @@ class CelesteWindow(QMainWindow):
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(64, 8192)
         self.tokens_spin.setSingleStep(64)
+        self.tokens_spin.setMinimumHeight(32)
         form.addRow("Max Tokens", self.tokens_spin)
 
         settings_layout.addLayout(form)
@@ -295,8 +298,9 @@ class CelesteWindow(QMainWindow):
         self.engram_purge_combo.addItem("Purge last 7 days", userData=7 * 24 * 60 * 60)
         self.engram_purge_combo.addItem("Purge last 30 days", userData=30 * 24 * 60 * 60)
         self.engram_purge_combo.addItem("Purge last 90 days", userData=90 * 24 * 60 * 60)
+        self.engram_purge_combo.setMinimumHeight(32)
         self.engram_purge_button = QPushButton("Purge Engrams")
-        self.engram_purge_button.setMinimumHeight(40)
+        self.engram_purge_button.setMinimumHeight(30)
         engram_row.addWidget(self.engram_purge_combo, 1)
         engram_row.addWidget(self.engram_purge_button)
         settings_layout.addLayout(engram_row)
@@ -311,7 +315,7 @@ class CelesteWindow(QMainWindow):
         settings_layout.addWidget(rag_subtitle)
 
         self.rag_dirs_list = QListWidget()
-        self.rag_dirs_list.setMinimumHeight(120)
+        self.rag_dirs_list.setMinimumHeight(150)
         settings_layout.addWidget(self.rag_dirs_list)
 
         rag_buttons = QGridLayout()
@@ -327,7 +331,7 @@ class CelesteWindow(QMainWindow):
             self.reindex_button,
             self.build_deep_button,
         ):
-            button.setMinimumHeight(40)
+            button.setMinimumHeight(30)
             button.setMinimumWidth(0)
         rag_buttons.addWidget(self.add_directory_button, 0, 0)
         rag_buttons.addWidget(self.remove_directory_button, 0, 1)
@@ -410,44 +414,48 @@ class CelesteWindow(QMainWindow):
                 font-family: "DejaVu Sans";
                 font-size: 14px;
             }
-            QFrame#settingsCard, QFrame#chatCard {
-                background: #162029;
-                border: 1px solid #274050;
-                border-radius: 18px;
-            }
-            QLabel#panelTitle {
-                font-size: 20px;
-                font-weight: 700;
-                color: #a8ffcf;
-            }
-            QLabel#panelSubtitle, QLabel#statusLabel {
-                color: #a9b7c6;
-            }
-            QTextBrowser, QPlainTextEdit, QComboBox, QSpinBox {
-                background: #0c1116;
-                border: 1px solid #2b3946;
-                border-radius: 12px;
-                padding: 8px;
-            }
-            QPushButton {
-                background: #1f7a5c;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 10px;
-                font-weight: 600;
-                font-size: 13px;
-                min-width: 0px;
-            }
-            QPushButton:disabled {
-                background: #33414d;
-                color: #7f8b96;
-            }
-            QPushButton:hover:!disabled {
-                background: #27956f;
-            }
-            QCheckBox {
-                spacing: 8px;
-            }
+        QFrame#settingsCard, QFrame#chatCard {
+            background: #162029;
+            border: 1px solid #274050;
+            border-radius: 16px;
+        }
+        QLabel#panelTitle {
+            font-size: 18px;
+            font-weight: 700;
+            color: #a8ffcf;
+        }
+        QLabel#panelSubtitle, QLabel#statusLabel {
+            color: #a9b7c6;
+            font-size: 12px;
+        }
+        QTextBrowser, QPlainTextEdit, QComboBox, QSpinBox {
+            background: #0c1116;
+            border: 1px solid #2b3946;
+            border-radius: 10px;
+            padding: 4px 8px;
+            min-height: 24px;
+            font-size: 12px;
+        }
+        QPushButton {
+            background: #1f7a5c;
+            border: none;
+            border-radius: 10px;
+            padding: 5px 8px;
+            font-weight: 600;
+            font-size: 11px;
+            min-width: 0px;
+        }
+        QPushButton:disabled {
+            background: #33414d;
+            color: #7f8b96;
+        }
+        QPushButton:hover:!disabled {
+            background: #27956f;
+        }
+        QCheckBox {
+            spacing: 6px;
+            font-size: 12px;
+        }
             """
         )
 
@@ -728,6 +736,11 @@ class CelesteWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if not os.path.exists(config_path):
+        from setup_wizard import ensure_config_with_wizard
+
+        if not ensure_config_with_wizard(config_path, app=app):
+            return 0
     window = CelesteWindow(config_path)
     window.show()
     return app.exec()

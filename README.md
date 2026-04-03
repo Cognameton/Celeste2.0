@@ -17,6 +17,8 @@ Celeste is a local-first desktop AI assistant with:
 
 ## Setup
 
+### Manual developer setup
+
 1. Create and activate a virtual environment.
 2. Install dependencies:
 
@@ -37,6 +39,24 @@ cp config.example.yaml config.yaml
 ```bash
 python desktop_app.py
 ```
+
+If `config.yaml` does not exist, Celeste now opens a first-run setup wizard before launching.
+
+### Bootstrap scripts
+
+Fresh Linux install:
+
+```bash
+./scripts/bootstrap_linux.sh
+```
+
+Fresh Windows install from PowerShell:
+
+```powershell
+.\scripts\bootstrap_windows.ps1
+```
+
+These scripts create `.venv`, install Python dependencies, build `vendor/llama.cpp` if no `llama-server` is available, run the setup wizard when `config.yaml` is missing, validate the environment, and then launch Celeste.
 
 ## Notes
 
