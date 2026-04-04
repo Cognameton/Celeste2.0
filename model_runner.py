@@ -449,7 +449,7 @@ class LLMRunner:
         if isinstance(self.cfg.tensor_split, str) and self.cfg.tensor_split.strip():
             cmd.extend(["-ts", self.cfg.tensor_split])
         if self.cfg.flash_attn:
-            cmd.append("-fa")
+            cmd.extend(["-fa", "on"])
 
         log_handle = open(self.server_log_path, "w", encoding="utf-8")
         self.server_log_handle = log_handle
