@@ -25,6 +25,14 @@ mkdir -p "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin"
 cp -f "$LLAMA_SERVER" "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/llama-server"
 chmod +x "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/llama-server"
 
+if [ -d "$PROJECT_ROOT/models" ]; then
+  cp -a "$PROJECT_ROOT/models" "$PROJECT_ROOT/dist/Celeste/models"
+fi
+
+if [ -d "$PROJECT_ROOT/embeddings" ]; then
+  cp -a "$PROJECT_ROOT/embeddings" "$PROJECT_ROOT/dist/Celeste/embeddings"
+fi
+
 mkdir -p "$PROJECT_ROOT/dist/packages"
 tar -C "$PROJECT_ROOT/dist" -czf "$PROJECT_ROOT/dist/packages/Celeste-linux-x86_64.tar.gz" Celeste
 

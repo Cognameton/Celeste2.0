@@ -70,3 +70,26 @@ If no `config.yaml` exists in the packaged app's user config directory, Celeste 
 - optional Piper TTS paths
 
 The wizard offers default Celeste folders but also lets the user browse to custom paths.
+
+## Optional Bundled Models
+
+If you want the installer to ship with a default tiny GGUF and the default embedding model, place them in these repo-local folders before running the package build:
+
+```text
+models/
+  default.gguf
+embeddings/
+  e5-small-v2/
+    config.json
+    modules.json
+    sentence_bert_config.json
+    model.safetensors
+    tokenizer.json
+    tokenizer_config.json
+    special_tokens_map.json
+    vocab.txt
+    1_Pooling/
+      config.json
+```
+
+The packaging scripts copy those folders into `dist/Celeste/` if present, and the setup wizard prefers those bundled paths by default. Users can still browse to a different GGUF or embedding model.

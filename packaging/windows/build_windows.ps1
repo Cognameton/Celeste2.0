@@ -37,6 +37,16 @@ $bundleVendorDir = Join-Path $projectRoot "dist\Celeste\vendor\llama.cpp\build\b
 New-Item -ItemType Directory -Force -Path $bundleVendorDir | Out-Null
 Copy-Item -Force $llamaServer (Join-Path $bundleVendorDir "llama-server.exe")
 
+$modelsDir = Join-Path $projectRoot "models"
+if (Test-Path $modelsDir) {
+    Copy-Item -Recurse -Force $modelsDir (Join-Path $projectRoot "dist\Celeste\models")
+}
+
+$embeddingsDir = Join-Path $projectRoot "embeddings"
+if (Test-Path $embeddingsDir) {
+    Copy-Item -Recurse -Force $embeddingsDir (Join-Path $projectRoot "dist\Celeste\embeddings")
+}
+
 $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
 if ($null -ne $iscc) {
     Invoke-Checked $iscc.Path (Join-Path $projectRoot "packaging\windows\celeste.iss")

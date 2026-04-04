@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 import os
+import shutil
 import sys
 
 import yaml
@@ -48,7 +49,7 @@ def _default_paths() -> dict[str, str]:
     home = os.path.expanduser("~")
     celeste_home = os.path.join(home, "Celeste")
     return {
-        "model_path": os.path.join(celeste_home, "models", "your-model.gguf"),
+        "model_path": os.path.join(celeste_home, "models", "default.gguf"),
         "embedding_model": os.path.join(celeste_home, "embeddings", "e5-small-v2"),
         "llama_server_executable": os.path.join(
             _project_root(),
@@ -65,6 +66,23 @@ def _default_paths() -> dict[str, str]:
         "tts_piper_config": os.path.join(celeste_home, "voices", "voice.onnx.json"),
         "tts_piper_executable": "piper",
     }
+
+
+def _bundled_default_model_path() -> str | None:
+    bundled_models_dir = os.path.join(_project_root(), "models")
+    if not os.path.isdir(bundled_models_dir):
+        return None
+    gguf_files = sorted(
+        os.path.join(bundled_models_dir, name)
+        for name in os.listdir(bundled_models_dir)
+        if name.lower().endswith(".gguf")
+    )
+    return gguf_files[0] if gguf_files else None
+
+
+def _bundled_default_embedding_dir() -> str | None:
+    bundled_embedding_dir = os.path.join(_project_root(), "embeddings", "e5-small-v2")
+    return bundled_embedding_dir if os.path.isdir(bundled_embedding_dir) else None
 
 
 def _load_template(template_path: str | None = None) -> dict:
@@ -226,10 +244,33 @@ class SetupWizardDialog(QDialog):
     def _write_config(self) -> None:
         cfg = self._collect_config()
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        for key in ("data_dir", "persist_dir"):
+        for key in ("data_dir", "persist_dir", "file_rag_dirs"):
+            if key == "file_rag_dirs":
+                for directory in cfg.get("file_rag_dirs", []) or []:
+                    normalized = os.path.expandvars(os.path.expanduser(str(directory or "")))
+                    if normalized:
+                        os.makedirs(normalized, exist_ok=True)
+                continue
             directory = os.path.expandvars(os.path.expanduser(str(cfg.get(key, "") or "")))
             if directory:
                 os.makedirs(directory, exist_ok=True)
+
+        model_path = os.path.expandvars(os.path.expanduser(str(cfg.get("model_path", "") or "")))
+        if model_path:
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            if not os.path.isfile(model_path):
+                bundled_model = _bundled_default_model_path()
+                if bundled_model and os.path.isfile(bundled_model):
+                    shutil.copy2(bundled_model, model_path)
+
+        embedding_dir = os.path.expandvars(os.path.expanduser(str(cfg.get("embedding_model", "") or "")))
+        if embedding_dir:
+            os.makedirs(os.path.dirname(embedding_dir), exist_ok=True)
+            if not os.path.isdir(embedding_dir):
+                bundled_embedding = _bundled_default_embedding_dir()
+                if bundled_embedding and os.path.isdir(bundled_embedding):
+                    shutil.copytree(bundled_embedding, embedding_dir)
+
         with open(self.config_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=False)
 
