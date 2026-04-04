@@ -15,6 +15,10 @@ OutputBaseFilename=Celeste-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName}
+RestartApplications=no
+UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
 Source: "..\..\dist\Celeste\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
