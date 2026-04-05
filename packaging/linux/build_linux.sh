@@ -52,9 +52,11 @@ SH
 [Desktop Entry]
 Name=Celeste
 Exec=Celeste
+Icon=celeste_icon
 Type=Application
 Categories=Utility;
 DESKTOP
+  cp "$PROJECT_ROOT/assets/celeste_icon.png" "$APPDIR/celeste_icon.png"
   cp "$APPDIR/Celeste.desktop" "$APPDIR/usr/share/applications/Celeste.desktop"
   appimagetool "$APPDIR" "$PROJECT_ROOT/dist/packages/Celeste-x86_64.AppImage"
 else

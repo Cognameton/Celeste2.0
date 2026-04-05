@@ -453,12 +453,20 @@ class LLMRunner:
 
         log_handle = open(self.server_log_path, "w", encoding="utf-8")
         self.server_log_handle = log_handle
-        self.server_proc = subprocess.Popen(
-            cmd,
+        popen_kwargs: Dict[str, Any] = dict(
             env=self._server_env(),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             text=True,
+        )
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            popen_kwargs["startupinfo"] = startupinfo
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        self.server_proc = subprocess.Popen(
+            cmd,
+            **popen_kwargs,
         )
         atexit.register(self._cleanup_server)
         self._wait_for_server()

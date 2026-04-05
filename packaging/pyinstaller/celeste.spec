@@ -7,7 +7,11 @@ from PyInstaller.utils.hooks import collect_all
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 
-datas = [(str(PROJECT_ROOT / "config.example.yaml"), ".")]
+datas = [
+    (str(PROJECT_ROOT / "config.example.yaml"), "."),
+    (str(PROJECT_ROOT / "assets" / "celeste_icon.png"), "assets"),
+    (str(PROJECT_ROOT / "assets" / "celeste_icon.ico"), "assets"),
+]
 binaries = []
 hiddenimports = []
 
@@ -47,6 +51,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Celeste",
+    icon=str(PROJECT_ROOT / "assets" / "celeste_icon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

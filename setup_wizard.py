@@ -11,6 +11,7 @@ import yaml
 
 try:
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -98,6 +99,9 @@ class SetupWizardDialog(QDialog):
         self.defaults = _default_paths()
         self.inputs: dict[str, QLineEdit] = {}
         self.setWindowTitle("Celeste First-Run Setup")
+        icon_path = resource_path("assets", "celeste_icon.png")
+        if os.path.isfile(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         self.resize(900, 760)
         self._build_ui()
 
@@ -330,6 +334,9 @@ def main() -> int:
         return 0
 
     app = QApplication.instance() or QApplication(sys.argv)
+    icon_path = resource_path("assets", "celeste_icon.png")
+    if os.path.isfile(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     dialog = SetupWizardDialog(config_path)
     return 0 if dialog.exec() == QDialog.Accepted else 1
 

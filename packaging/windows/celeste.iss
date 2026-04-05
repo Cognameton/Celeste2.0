@@ -12,6 +12,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\..\dist\installer
 OutputBaseFilename=Celeste-Setup-{#MyAppVersion}
+SetupIconFile=..\..\assets\celeste_icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

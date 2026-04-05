@@ -776,13 +776,6 @@ class Agent:
 
     def _handle_document_query(self, user_msg: str) -> Optional[str]:
         u_low = user_msg.strip().lower()
-        total_docs = self.file_rag.document_count()
-        index_stats = self.file_rag.deep_index_stats()
-        deep_docs = int(index_stats.get("deep_documents", 0) or 0)
-        chunk_count = int(index_stats.get("chunks_indexed", 0) or 0)
-        if total_docs <= 0:
-            return "I do not see any indexed documents right now."
-
         inventory_phrases = (
             "how many documents, sources, and chunks",
             "how many documents sources and chunks",
@@ -794,6 +787,12 @@ class Agent:
             "how many sources do you have access to",
         )
         if any(phrase in u_low for phrase in inventory_phrases):
+            total_docs = self.file_rag.document_count()
+            index_stats = self.file_rag.deep_index_stats()
+            deep_docs = int(index_stats.get("deep_documents", 0) or 0)
+            chunk_count = int(index_stats.get("chunks_indexed", 0) or 0)
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             if deep_docs > 0 and chunk_count > 0:
                 return (
                     f"I can see {total_docs} indexed documents in the catalog. "
@@ -812,6 +811,9 @@ class Agent:
             "how many files do you see",
         )
         if any(phrase in u_low for phrase in count_phrases):
+            total_docs = self.file_rag.document_count()
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             return f"I can see {total_docs} indexed documents."
 
         repeated_source_phrases = (
@@ -822,6 +824,12 @@ class Agent:
             "using the same sources",
         )
         if any(phrase in u_low for phrase in repeated_source_phrases):
+            total_docs = self.file_rag.document_count()
+            index_stats = self.file_rag.deep_index_stats()
+            deep_docs = int(index_stats.get("deep_documents", 0) or 0)
+            chunk_count = int(index_stats.get("chunks_indexed", 0) or 0)
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             if deep_docs > 0 and chunk_count > 0:
                 return (
                     f"No. I have access to {total_docs} indexed documents, and the deep index covers {deep_docs} of them across {chunk_count} chunks. "
@@ -839,6 +847,9 @@ class Agent:
             "are these the only files",
         )
         if any(phrase in u_low for phrase in only_phrases):
+            total_docs = self.file_rag.document_count()
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             return (
                 f"No. I can see {total_docs} indexed documents in total. "
                 "Earlier I was only showing the files in the current retrieval context."
@@ -853,6 +864,9 @@ class Agent:
             "what files can you see",
         )
         if any(phrase in u_low for phrase in list_phrases):
+            total_docs = self.file_rag.document_count()
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             shown = self.file_rag.list_documents(limit=25)
             lines = "\n".join(f"- {name}" for name in shown)
             if total_docs > len(shown):
@@ -866,6 +880,9 @@ class Agent:
         topical_prefixes = ("what documents", "which documents", "what files", "which files")
         topical_cues = ("discuss", "mention", "cover", "about", "related to", "on ")
         if u_low.startswith(topical_prefixes) and any(cue in u_low for cue in topical_cues):
+            total_docs = self.file_rag.document_count()
+            if total_docs <= 0:
+                return "I do not see any indexed documents right now."
             matches = self.file_rag.search_document_titles(user_msg, top_k=8)
             if not matches:
                 return "I do not see any indexed documents that clearly match that topic."

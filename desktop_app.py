@@ -8,7 +8,7 @@ import sys
 
 try:
     from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
-    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -37,7 +37,7 @@ except ImportError as exc:  # pragma: no cover - runtime dependency
 
 from app_service import CelesteService
 from config_types import AgentConfig
-from app_paths import default_config_path
+from app_paths import default_config_path, resource_path
 
 
 class ServiceWorker(QObject):
@@ -221,6 +221,9 @@ class CelesteWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Celeste")
+        icon_path = resource_path("assets", "celeste_icon.png")
+        if os.path.isfile(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         self.resize(1280, 820)
 
         root = QWidget()
@@ -736,6 +739,9 @@ class CelesteWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    icon_path = resource_path("assets", "celeste_icon.png")
+    if os.path.isfile(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     config_path = default_config_path()
     if not os.path.exists(config_path):
         from setup_wizard import ensure_config_with_wizard
