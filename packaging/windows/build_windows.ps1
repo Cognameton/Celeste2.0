@@ -48,9 +48,10 @@ if (Test-Path $embeddingsDir) {
     Copy-Item -Recurse -Force $embeddingsDir (Join-Path $projectRoot "dist\Celeste\embeddings")
 }
 
-$piperDir = Join-Path $projectRoot "piper"
+$piperDir = Join-Path $projectRoot "piper\windows"
 if (Test-Path $piperDir) {
-    Copy-Item -Recurse -Force $piperDir (Join-Path $projectRoot "dist\Celeste\piper")
+    New-Item -ItemType Directory -Force -Path (Join-Path $projectRoot "dist\Celeste\piper") | Out-Null
+    Copy-Item -Recurse -Force $piperDir (Join-Path $projectRoot "dist\Celeste\piper\windows")
 }
 
 $voicesDir = Join-Path $projectRoot "voices"

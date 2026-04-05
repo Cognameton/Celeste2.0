@@ -118,7 +118,7 @@ def _bundled_llama_server_path() -> str | None:
 
 
 def _bundled_piper_executable() -> str | None:
-    search_root = os.path.join(_project_root(), "piper")
+    search_root = os.path.join(_project_root(), "piper", "windows" if os.name == "nt" else "linux")
     if os.name == "nt":
         return _find_first_matching(search_root, ["piper.exe"])
     return _find_first_matching(search_root, ["piper"])

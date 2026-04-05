@@ -34,8 +34,9 @@ if [ -d "$PROJECT_ROOT/embeddings" ]; then
   cp -a "$PROJECT_ROOT/embeddings" "$PROJECT_ROOT/dist/Celeste/embeddings"
 fi
 
-if [ -d "$PROJECT_ROOT/piper" ]; then
-  cp -a "$PROJECT_ROOT/piper" "$PROJECT_ROOT/dist/Celeste/piper"
+if [ -d "$PROJECT_ROOT/piper/linux" ]; then
+  mkdir -p "$PROJECT_ROOT/dist/Celeste/piper"
+  cp -a "$PROJECT_ROOT/piper/linux" "$PROJECT_ROOT/dist/Celeste/piper/linux"
 fi
 
 if [ -d "$PROJECT_ROOT/voices" ]; then

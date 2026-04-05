@@ -71,9 +71,9 @@ If no `config.yaml` exists in the packaged app's user config directory, Celeste 
 
 The wizard offers default Celeste folders but also lets the user browse to custom paths.
 
-## Optional Bundled Models
+## Optional Bundled Runtime Assets
 
-If you want the installer to ship with a default tiny GGUF and the default embedding model, place them in these repo-local folders before running the package build:
+If you want the installer to ship with bundled runtime assets, place them in these repo-local folders before running the package build:
 
 ```text
 models/
@@ -90,6 +90,23 @@ embeddings/
     vocab.txt
     1_Pooling/
       config.json
+voices/
+  en_US-amy-medium/
+    en_US-amy-medium.onnx
+    en_US-amy-medium.onnx.json
+piper/
+  linux/
+    ...
+  windows/
+    ...
 ```
 
-The packaging scripts copy those folders into `dist/Celeste/` if present, and the setup wizard prefers those bundled paths by default. Users can still browse to a different GGUF or embedding model.
+The packaging scripts copy these folders into `dist/Celeste/` if present:
+
+- `models/`
+- `embeddings/`
+- `voices/`
+- `piper/linux/` for Linux packages
+- `piper/windows/` for Windows packages
+
+The setup wizard prefers bundled runtime paths from the installed app when present, while still keeping user data paths under the user profile. Users can still browse to different model, embedding, or TTS assets.
