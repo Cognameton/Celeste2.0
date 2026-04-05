@@ -358,8 +358,10 @@ class CelesteWindow(QMainWindow):
         button_row.setSpacing(10)
         self.reload_button = QPushButton("Apply and Reload")
         self.refresh_models_button = QPushButton("Refresh Models")
+        self.shutdown_button = QPushButton("Shutdown Celeste")
         button_row.addWidget(self.reload_button)
         button_row.addWidget(self.refresh_models_button)
+        button_row.addWidget(self.shutdown_button)
         settings_layout.addLayout(button_row)
 
         self.status_label = QLabel("Starting...")
@@ -426,6 +428,7 @@ class CelesteWindow(QMainWindow):
 
         self.reload_button.clicked.connect(self._apply_settings)
         self.refresh_models_button.clicked.connect(lambda: self.load_models_requested.emit())
+        self.shutdown_button.clicked.connect(self._shutdown_app)
         self.send_button.clicked.connect(self._send_message)
         self.clear_button.clicked.connect(self.chat_view.clear)
         self.add_directory_button.clicked.connect(self._choose_rag_directory)
@@ -797,6 +800,30 @@ class CelesteWindow(QMainWindow):
         self._set_busy(True, "Building deep library index...")
         self._show_deep_index_progress("Building deep library index...", 0)
         self.build_deep_index_requested.emit()
+
+    def _shutdown_app(self) -> None:
+        if self.busy:
+            reply = QMessageBox.question(
+                self,
+                "Shutdown Celeste",
+                "Celeste is busy. Shut it down anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        else:
+            reply = QMessageBox.question(
+                self,
+                "Shutdown Celeste",
+                "Shut Celeste down now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        self._set_busy(True, "Shutting down Celeste...")
+        self.close()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:
