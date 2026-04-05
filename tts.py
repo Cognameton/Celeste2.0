@@ -15,6 +15,9 @@ import subprocess
 import tempfile
 from typing import Optional
 
+if os.name == "nt":  # pragma: no cover - Windows-only runtime path
+    import winsound
+
 
 class TTSManager:
     def __init__(self, cfg):
@@ -123,6 +126,12 @@ class TTSManager:
     def _build_piper_env(self, resolved_exe: str) -> dict[str, str]:
         env = os.environ.copy()
         lib_dir = os.path.dirname(resolved_exe)
+        if os.name == "nt":
+            existing_path = env.get("PATH", "")
+            path_parts = existing_path.split(os.pathsep) if existing_path else []
+            if lib_dir not in path_parts:
+                env["PATH"] = lib_dir + (os.pathsep + existing_path if existing_path else "")
+            return env
         existing_ld = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}" if existing_ld else lib_dir
 
@@ -147,11 +156,21 @@ class TTSManager:
                 text=True,
                 timeout=5,
                 env=self._piper_env,
+                **self._piper_subprocess_kwargs(),
             )
         except Exception:
             return False
         help_text = (res.stdout or "") + (res.stderr or "")
         return "--model" in help_text or ("piper" in help_text.lower() and "usage" in help_text.lower())
+
+    def _piper_subprocess_kwargs(self) -> dict:
+        kwargs: dict = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            kwargs["startupinfo"] = startupinfo
+        return kwargs
 
     def speak(self, text: str) -> None:
         if not self.enabled:
@@ -216,9 +235,12 @@ class TTSManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=self._piper_env,
+                **self._piper_subprocess_kwargs(),
             )
 
-            if self._piper_player:
+            if os.name == "nt":
+                winsound.PlaySound(tmp_path, winsound.SND_FILENAME)
+            elif self._piper_player:
                 subprocess.run(
                     [self._piper_player, "-q", tmp_path],
                     check=True,
