@@ -48,6 +48,16 @@ if (Test-Path $embeddingsDir) {
     Copy-Item -Recurse -Force $embeddingsDir (Join-Path $projectRoot "dist\Celeste\embeddings")
 }
 
+$piperDir = Join-Path $projectRoot "piper"
+if (Test-Path $piperDir) {
+    Copy-Item -Recurse -Force $piperDir (Join-Path $projectRoot "dist\Celeste\piper")
+}
+
+$voicesDir = Join-Path $projectRoot "voices"
+if (Test-Path $voicesDir) {
+    Copy-Item -Recurse -Force $voicesDir (Join-Path $projectRoot "dist\Celeste\voices")
+}
+
 $isccCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
 $isccPath = $null
 if ($null -ne $isccCommand) {

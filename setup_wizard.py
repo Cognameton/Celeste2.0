@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fnmatch
 import os
 import shutil
 import sys
@@ -49,10 +50,16 @@ def _template_path() -> str:
 def _default_paths() -> dict[str, str]:
     home = os.path.expanduser("~")
     celeste_home = os.path.join(home, "Celeste")
+    bundled_model = _bundled_default_model_path()
+    bundled_embedding = _bundled_default_embedding_dir()
+    bundled_llama = _bundled_llama_server_path()
+    bundled_piper = _bundled_piper_executable()
+    bundled_voice_model = _bundled_piper_voice_model()
+    bundled_voice_config = _bundled_piper_voice_config()
     return {
-        "model_path": os.path.join(celeste_home, "models", "default.gguf"),
-        "embedding_model": os.path.join(celeste_home, "embeddings", "e5-small-v2"),
-        "llama_server_executable": os.path.join(
+        "model_path": bundled_model or os.path.join(celeste_home, "models", "default.gguf"),
+        "embedding_model": bundled_embedding or os.path.join(celeste_home, "embeddings", "e5-small-v2"),
+        "llama_server_executable": bundled_llama or os.path.join(
             _project_root(),
             "vendor",
             "llama.cpp",
@@ -63,10 +70,22 @@ def _default_paths() -> dict[str, str]:
         "data_dir": os.path.join(celeste_home, "data"),
         "persist_dir": os.path.join(celeste_home, "chroma"),
         "file_rag_dir": os.path.join(celeste_home, "library"),
-        "tts_piper_model": os.path.join(celeste_home, "voices", "voice.onnx"),
-        "tts_piper_config": os.path.join(celeste_home, "voices", "voice.onnx.json"),
-        "tts_piper_executable": "piper",
+        "tts_piper_model": bundled_voice_model or os.path.join(celeste_home, "voices", "voice.onnx"),
+        "tts_piper_config": bundled_voice_config or os.path.join(celeste_home, "voices", "voice.onnx.json"),
+        "tts_piper_executable": bundled_piper or "piper",
     }
+
+
+def _find_first_matching(root: str, patterns: list[str], *, want_dir: bool = False) -> str | None:
+    if not os.path.isdir(root):
+        return None
+    for dirpath, dirnames, filenames in os.walk(root):
+        names = dirnames if want_dir else filenames
+        for pattern in patterns:
+            for name in sorted(names):
+                if fnmatch.fnmatch(name.lower(), pattern.lower()):
+                    return os.path.join(dirpath, name)
+    return None
 
 
 def _bundled_default_model_path() -> str | None:
@@ -84,6 +103,33 @@ def _bundled_default_model_path() -> str | None:
 def _bundled_default_embedding_dir() -> str | None:
     bundled_embedding_dir = os.path.join(_project_root(), "embeddings", "e5-small-v2")
     return bundled_embedding_dir if os.path.isdir(bundled_embedding_dir) else None
+
+
+def _bundled_llama_server_path() -> str | None:
+    candidates = [
+        os.path.join(_project_root(), "vendor", "llama.cpp", "build", "bin", "Release", "llama-server.exe"),
+        os.path.join(_project_root(), "vendor", "llama.cpp", "build", "bin", "llama-server.exe"),
+        os.path.join(_project_root(), "vendor", "llama.cpp", "build", "bin", "llama-server"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _bundled_piper_executable() -> str | None:
+    search_root = os.path.join(_project_root(), "piper")
+    if os.name == "nt":
+        return _find_first_matching(search_root, ["piper.exe"])
+    return _find_first_matching(search_root, ["piper"])
+
+
+def _bundled_piper_voice_model() -> str | None:
+    return _find_first_matching(os.path.join(_project_root(), "voices"), ["*.onnx"])
+
+
+def _bundled_piper_voice_config() -> str | None:
+    return _find_first_matching(os.path.join(_project_root(), "voices"), ["*.onnx.json"])
 
 
 def _load_template(template_path: str | None = None) -> dict:

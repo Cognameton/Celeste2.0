@@ -34,6 +34,14 @@ if [ -d "$PROJECT_ROOT/embeddings" ]; then
   cp -a "$PROJECT_ROOT/embeddings" "$PROJECT_ROOT/dist/Celeste/embeddings"
 fi
 
+if [ -d "$PROJECT_ROOT/piper" ]; then
+  cp -a "$PROJECT_ROOT/piper" "$PROJECT_ROOT/dist/Celeste/piper"
+fi
+
+if [ -d "$PROJECT_ROOT/voices" ]; then
+  cp -a "$PROJECT_ROOT/voices" "$PROJECT_ROOT/dist/Celeste/voices"
+fi
+
 mkdir -p "$PROJECT_ROOT/dist/packages"
 tar -C "$PROJECT_ROOT/dist" -czf "$PROJECT_ROOT/dist/packages/Celeste-linux-x86_64.tar.gz" Celeste
 
