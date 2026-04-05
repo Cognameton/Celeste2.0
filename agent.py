@@ -182,6 +182,9 @@ class Agent:
             "- Reply concisely.\n"
             "- For code/IT tasks, use ordered steps.\n"
             "- Do not repeat headings. Output only the answer unless steps are requested.\n"
+            "- Do not output internal reasoning tags like <think> or </think>.\n"
+            "- Do not roleplay actions, gestures, stage directions, emotes, or narrative asides.\n"
+            "- Do not repeat prompt section labels such as Pattern Memory, Notes, Grounding Sources, User, Assistant, or Instruction.\n"
             "- Use second-person (“you/your”) for the user and first-person (“I/my”) for yourself.\n"
             "- Provide direct help even when the task is creative, exploratory, or strategic.\n"
             "- Offer outlines, examples, or drafts for writing requests instead of refusing.\n"
@@ -316,6 +319,10 @@ class Agent:
         low = (answer or "").strip().lower()
         if not low:
             return True
+        if "<think>" in low or "</think>" in low:
+            return True
+        if "pattern memory:" in low or "grounding sources:" in low or "notes:" in low:
+            return True
         for phrase in self._retry_phrases:
             if phrase in low:
                 return True
@@ -335,7 +342,41 @@ class Agent:
             return True
         if "you can consult" in low and "resources" in low:
             return True
+        lines = [line.strip() for line in (answer or "").splitlines() if line.strip()]
+        if lines:
+            stage_direction_lines = sum(
+                1
+                for line in lines
+                if line.startswith("*") and line.endswith("*")
+            )
+            if stage_direction_lines >= max(2, len(lines) // 2):
+                return True
         return False
+
+    def _sanitize_answer_style(self, answer: str) -> str:
+        text = answer or ""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(
+            r"(?im)^(pattern memory|notes|grounding sources|retrieved files|file context|library context)\s*:\s*$",
+            "",
+            text,
+        )
+        text = re.sub(r"(?im)^(user|assistant|system|instruction)\s*:\s*$", "", text)
+        text = re.sub(r"(?im)^-\s*(hello celeste|helloceleste)\s*$", "", text)
+
+        cleaned_lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                cleaned_lines.append("")
+                continue
+            if re.fullmatch(r"\*[^*]+\*", line):
+                continue
+            cleaned_lines.append(raw_line)
+
+        text = "\n".join(cleaned_lines)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     def _build_retry_instruction(self, prior_answer: str, user_msg: str) -> str:
         cleaned = (prior_answer or "").strip().replace("\n", " ")
@@ -1118,6 +1159,7 @@ class Agent:
         base_instruction_lines = [
             "Answer the user's message succinctly. Output ONLY the answer text. No quotes, no headings, no code fences.",
             "Reply in the same language as the user's message. If the user wrote in English, reply in English.",
+            "Do not output <think> tags, internal reasoning, stage directions, roleplay actions, or prompt section labels.",
         ]
         if library_requested:
             if grounding_sources:
@@ -1268,6 +1310,7 @@ Assistant:"""
 
         # Perspective correction (conversational voice)
         answer = self._enforce_perspective(user, answer)
+        answer = self._sanitize_answer_style(answer)
         answer = self._sanitize_answer_citations(answer, max_label=len(grounding_sources))
 
         # Fallback: if answer is empty or generic refusal, retry once with stronger instruction
@@ -1297,6 +1340,7 @@ Assistant:"""
                 ).strip()
             )
             answer = self._enforce_perspective(user, retry_answer)
+            answer = self._sanitize_answer_style(answer)
             answer = self._sanitize_answer_citations(answer, max_label=len(grounding_sources))
 
         if require_citations and not self._citation_labels(answer, max_label=len(grounding_sources)):
@@ -1328,6 +1372,7 @@ Assistant:"""
                 ).strip()
             )
             answer = self._enforce_perspective(user, retry_answer)
+            answer = self._sanitize_answer_style(answer)
             answer = self._sanitize_answer_citations(answer, max_label=len(grounding_sources))
 
         if (
@@ -1364,6 +1409,7 @@ Assistant:"""
                 ).strip()
             )
             answer = self._enforce_perspective(user, retry_answer)
+            answer = self._sanitize_answer_style(answer)
             answer = self._sanitize_answer_citations(answer, max_label=len(grounding_sources))
 
         answer = self._append_source_list(answer, grounding_sources)
