@@ -388,6 +388,13 @@ class CelesteWindow(QMainWindow):
         chat_title.setObjectName("panelTitle")
         chat_layout.addWidget(chat_title)
 
+        self.chat_hint = QLabel(
+            'Library lookup hint: mention "indexed library", "documents", "files", or ask Celeste to search the library when you want document-backed answers.'
+        )
+        self.chat_hint.setWordWrap(True)
+        self.chat_hint.setObjectName("panelSubtitle")
+        chat_layout.addWidget(self.chat_hint)
+
         self.chat_view = QTextBrowser()
         self.chat_view.setOpenExternalLinks(False)
         self.chat_view.setReadOnly(True)

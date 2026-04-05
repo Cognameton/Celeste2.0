@@ -576,6 +576,28 @@ class Agent:
             for token in ("library", "indexed", "documents", "document", "files", "file", "docs")
         )
 
+    def _should_run_file_rag(self, user_msg: str) -> bool:
+        u_strip = (user_msg or "").strip()
+        u_low = u_strip.lower()
+        if not u_low:
+            return False
+        if self._is_library_requested(u_strip):
+            return True
+        if self._is_broad_library_summary_request(u_strip):
+            return True
+        if self._is_library_only_request(u_strip):
+            return True
+        if self._handle_document_query(u_strip) is not None:
+            return True
+        filename_query = any(
+            phrase in u_low
+            for phrase in ("can you see", "do you see", "is there a file", "do you have a file", "how about")
+        ) and any(
+            token in u_low
+            for token in ("file", "files", ".txt", ".md", ".pdf", ".json", ".yaml", ".yml")
+        )
+        return filename_query
+
     def _is_library_only_request(self, user_msg: str) -> bool:
         u_low = (user_msg or "").lower()
         return any(
@@ -958,9 +980,13 @@ class Agent:
         mem_texts = [m["text"] for m in raw_mems]
         pattern_mem_texts = [m["text"] for m in raw_pattern_mems]
         rag_top_k = max(1, min(getattr(self.cfg, "file_rag_top_k", 4), 6 if library_requested else 4))
-        file_context = self.file_rag.get_context(
-            user,
-            top_k=rag_top_k,
+        file_context = (
+            self.file_rag.get_context(
+                user,
+                top_k=rag_top_k,
+            )
+            if self._should_run_file_rag(u_strip)
+            else {"matches": [], "snippets": [], "library_snippets": [], "snippet_records": []}
         )
         file_hits = file_context.get("matches", [])
         file_list = [
