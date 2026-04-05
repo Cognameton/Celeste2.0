@@ -16,6 +16,10 @@ import time
 import urllib.error
 import urllib.request
 
+if os.name == "nt":  # pragma: no cover - Windows-only runtime path
+    import ctypes
+    from ctypes import wintypes
+
 PROJECT_ROOT = runtime_root()
 HOME_DIR = os.path.expanduser("~")
 _FLASH_ATTN_MODE_CACHE: dict[str, str] = {}
@@ -44,6 +48,43 @@ _MODEL_SEARCH_ROOTS = [
     PROJECT_ROOT,
 ]
 _SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
+
+if os.name == "nt":  # pragma: no cover - Windows-only runtime path
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    JobObjectExtendedLimitInformation = 9
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
 
 
 def normalize_path(path: str, base_dir: str | None = None) -> str:
@@ -183,6 +224,7 @@ class LLMRunner:
         self.server_url: str | None = None
         self.server_log_path: str | None = None
         self.server_log_handle = None
+        self._server_job_handle = None
         backend = (cfg.backend or "").lower()
         if backend == "llama_cpp":
             try:
@@ -347,12 +389,46 @@ class LLMRunner:
                 self.server_proc.wait(timeout=5)
         self.server_proc = None
         self.server_url = None
+        if self._server_job_handle is not None:
+            try:
+                ctypes.windll.kernel32.CloseHandle(self._server_job_handle)
+            except Exception:
+                pass
+            self._server_job_handle = None
         if self.server_log_handle is not None:
             try:
                 self.server_log_handle.close()
             except Exception:
                 pass
             self.server_log_handle = None
+
+    def _attach_windows_job_object(self, proc: subprocess.Popen[str]) -> None:
+        if os.name != "nt":
+            return
+        try:
+            kernel32 = ctypes.windll.kernel32
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                return
+            info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            ok = kernel32.SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not ok:
+                kernel32.CloseHandle(job)
+                return
+            proc_handle = wintypes.HANDLE(int(proc._handle))
+            ok = kernel32.AssignProcessToJobObject(job, proc_handle)
+            if not ok:
+                kernel32.CloseHandle(job)
+                return
+            self._server_job_handle = job
+        except Exception:
+            return
 
     def _server_request(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not self.server_url:
@@ -517,6 +593,7 @@ class LLMRunner:
             cmd,
             **popen_kwargs,
         )
+        self._attach_windows_job_object(self.server_proc)
         atexit.register(self._cleanup_server)
         self._wait_for_server()
         self.backend = "llama_server"
