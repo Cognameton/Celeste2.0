@@ -743,6 +743,20 @@ class FileRAG:
             start = max(end - overlap, start + 1)
         return chunks
 
+    def _emit_deep_progress(
+        self,
+        progress_cb: Optional[Callable[..., None]],
+        message: str,
+        percent: int,
+    ) -> None:
+        if progress_cb is None:
+            return
+        bounded = max(0, min(100, int(percent)))
+        try:
+            progress_cb(message, bounded)
+        except TypeError:
+            progress_cb(message)
+
     def build_deep_index(
         self,
         progress_cb: Optional[Callable[[str], None]] = None,
@@ -756,7 +770,12 @@ class FileRAG:
         total_files = len(self.files)
         for idx, item in enumerate(self.files, start=1):
             if progress_cb and (idx == 1 or idx % 25 == 0 or idx == total_files):
-                progress_cb(f"Deep indexing file {idx}/{total_files}: {item['rel_path']}")
+                percent = max(1, round((idx / max(total_files, 1)) * 55))
+                self._emit_deep_progress(
+                    progress_cb,
+                    f"Deep indexing file {idx}/{total_files}: {item['rel_path']}",
+                    percent,
+                )
             text = self._read_file_text(item["path"])
             if not text.strip():
                 continue
@@ -764,8 +783,11 @@ class FileRAG:
                 chunks.append(self._build_chunk_record(item, chunk_index, chunk))
             files_indexed += 1
 
-        if progress_cb:
-            progress_cb(f"Building deep TF-IDF index from {len(chunks)} chunks...")
+        self._emit_deep_progress(
+            progress_cb,
+            f"Building deep TF-IDF index from {len(chunks)} chunks...",
+            60,
+        )
 
         if not chunks:
             self._invalidate_deep_index()
@@ -781,8 +803,12 @@ class FileRAG:
 
         semantic_enabled = self._semantic_enabled() and self._ensure_embedder()
         semantic_dim: int | None = None
-        if self._semantic_enabled() and not semantic_enabled and progress_cb:
-            progress_cb("Semantic retrieval is enabled, but the embedding model could not be loaded. Building TF-IDF only.")
+        if self._semantic_enabled() and not semantic_enabled:
+            self._emit_deep_progress(
+                progress_cb,
+                "Semantic retrieval is enabled, but the embedding model could not be loaded. Building TF-IDF only.",
+                70,
+            )
         if semantic_enabled:
             semantic_dim = int(self.embedder.get_sentence_embedding_dimension())
             tmp_embeddings_path = self.deep_embeddings_path + ".tmp.npy"
@@ -796,7 +822,12 @@ class FileRAG:
             for batch_index, start in enumerate(range(0, len(chunks), FILE_RAG_SEMANTIC_BATCH_SIZE), start=1):
                 end = min(len(chunks), start + FILE_RAG_SEMANTIC_BATCH_SIZE)
                 if progress_cb and (batch_index == 1 or batch_index % 25 == 0 or end == len(chunks)):
-                    progress_cb(f"Encoding semantic chunk embeddings {batch_index}/{total_batches}...")
+                    percent = 65 + round((end / max(len(chunks), 1)) * 30)
+                    self._emit_deep_progress(
+                        progress_cb,
+                        f"Encoding semantic chunk embeddings {batch_index}/{total_batches}...",
+                        percent,
+                    )
                 texts = [chunk["text"] for chunk in chunks[start:end]]
                 embeddings[start:end] = self._encode_texts(texts, batch_size=min(FILE_RAG_SEMANTIC_BATCH_SIZE, len(texts)))
             embeddings.flush()
@@ -808,6 +839,8 @@ class FileRAG:
                     os.unlink(self.deep_embeddings_path)
             except OSError:
                 pass
+
+        self._emit_deep_progress(progress_cb, "Finalizing deep index files...", 97)
 
         with gzip.open(self.deep_chunks_path, "wt", encoding="utf-8") as f:
             json.dump(chunks, f)
@@ -836,6 +869,8 @@ class FileRAG:
         self._deep_embedding_matrix = (
             np.load(self.deep_embeddings_path, mmap_mode="r") if semantic_enabled and os.path.isfile(self.deep_embeddings_path) else None
         )
+
+        self._emit_deep_progress(progress_cb, "Deep index build complete.", 100)
 
         return {
             "directories": list(self.directories),

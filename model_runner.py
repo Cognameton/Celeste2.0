@@ -6,7 +6,9 @@ import atexit
 import inspect
 import json
 import os
+import re
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -16,6 +18,7 @@ import urllib.request
 
 PROJECT_ROOT = runtime_root()
 HOME_DIR = os.path.expanduser("~")
+_FLASH_ATTN_MODE_CACHE: dict[str, str] = {}
 _LLAMA_CPP_LIB_CANDIDATES = [
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "libllama.so"),
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "src", "libllama.so"),
@@ -144,6 +147,31 @@ def discover_llama_server_candidates(cfg: AgentConfig | None = None) -> List[str
 
 def resolve_llama_server_executable(cfg: AgentConfig | None = None) -> str | None:
     return next((path for path in discover_llama_server_candidates(cfg) if os.path.isfile(path)), None)
+
+
+def detect_flash_attn_mode(server_bin: str) -> str:
+    cached = _FLASH_ATTN_MODE_CACHE.get(server_bin)
+    if cached:
+        return cached
+    mode = "flag"
+    try:
+        result = subprocess.run(
+            [server_bin, "-h"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=_prepare_llama_cpp_env(),
+            timeout=10,
+        )
+        help_text = result.stdout or ""
+        if re.search(r"--flash-attn\s+\[on\|off\|auto\]", help_text):
+            mode = "value"
+        elif re.search(r"--flash-attn.*enable Flash Attention", help_text):
+            mode = "flag"
+    except Exception:
+        mode = "flag"
+    _FLASH_ATTN_MODE_CACHE[server_bin] = mode
+    return mode
 
 class LLMRunner:
     def __init__(self, cfg: AgentConfig, status_cb: Callable[[str], None] | None = None):
@@ -299,12 +327,24 @@ class LLMRunner:
 
     def _cleanup_server(self) -> None:
         if self.server_proc and self.server_proc.poll() is None:
-            self.server_proc.terminate()
             try:
-                self.server_proc.wait(timeout=3)
+                if os.name != "nt":
+                    os.killpg(self.server_proc.pid, signal.SIGTERM)
+                else:
+                    self.server_proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                self.server_proc.wait(timeout=8)
             except subprocess.TimeoutExpired:
-                self.server_proc.kill()
-                self.server_proc.wait(timeout=3)
+                if os.name != "nt":
+                    try:
+                        os.killpg(self.server_proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    self.server_proc.kill()
+                self.server_proc.wait(timeout=5)
         self.server_proc = None
         self.server_url = None
         if self.server_log_handle is not None:
@@ -449,7 +489,11 @@ class LLMRunner:
         if isinstance(self.cfg.tensor_split, str) and self.cfg.tensor_split.strip():
             cmd.extend(["-ts", self.cfg.tensor_split])
         if self.cfg.flash_attn:
-            cmd.extend(["-fa", "on"])
+            flash_attn_mode = detect_flash_attn_mode(server_bin)
+            if flash_attn_mode == "value":
+                cmd.extend(["-fa", "on"])
+            else:
+                cmd.append("-fa")
 
         log_handle = open(self.server_log_path, "w", encoding="utf-8")
         self.server_log_handle = log_handle
@@ -463,7 +507,12 @@ class LLMRunner:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             popen_kwargs["startupinfo"] = startupinfo
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            popen_kwargs["creationflags"] = (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            )
+        else:
+            popen_kwargs["start_new_session"] = True
         self.server_proc = subprocess.Popen(
             cmd,
             **popen_kwargs,

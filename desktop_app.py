@@ -7,7 +7,7 @@ import re
 import sys
 
 try:
-    from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+    from PySide6.QtCore import QObject, QMetaObject, QThread, Qt, Signal, Slot
     from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import (
         QApplication,
@@ -24,6 +24,8 @@ try:
         QMessageBox,
         QPushButton,
         QPlainTextEdit,
+        QProgressBar,
+        QProgressDialog,
         QSpinBox,
         QTextBrowser,
         QVBoxLayout,
@@ -49,6 +51,7 @@ class ServiceWorker(QObject):
     reply_ready = Signal(str, str, str)
     failed = Signal(str)
     status = Signal(str)
+    progress = Signal(int, str)
 
     def __init__(self, config_path: str):
         super().__init__()
@@ -128,13 +131,18 @@ class ServiceWorker(QObject):
     @Slot()
     def build_deep_index(self) -> None:
         try:
-            self.status.emit("Building deep library index...")
-            cfg, stats = self.service.build_deep_rag_index(progress_cb=self.status.emit)
+            def on_progress(message: str, percent: int = 0) -> None:
+                self.status.emit(message)
+                self.progress.emit(int(percent), message)
+
+            on_progress("Building deep library index...", 0)
+            cfg, stats = self.service.build_deep_rag_index(progress_cb=on_progress)
             message = (
                 f"Deep index ready: {stats.get('files_indexed', 0)} files, "
                 f"{stats.get('chunks_indexed', 0)} chunks."
             )
             self.rag_updated.emit(cfg, message)
+            self.progress.emit(100, "Deep index ready.")
             self.status.emit("Deep index ready.")
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -214,6 +222,7 @@ class CelesteWindow(QMainWindow):
         self.config_path = config_path
         self.cfg: AgentConfig | None = None
         self.busy = False
+        self._busy_reason: str | None = None
         self._build_ui()
         self._build_worker()
         self.load_models_requested.emit()
@@ -357,6 +366,14 @@ class CelesteWindow(QMainWindow):
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
         settings_layout.addWidget(self.status_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setVisible(False)
+        settings_layout.addWidget(self.progress_bar)
         settings_layout.addStretch(1)
 
         chat_card = QFrame()
@@ -394,6 +411,15 @@ class CelesteWindow(QMainWindow):
         layout.setStretch(1, 1)
         self.setCentralWidget(root)
 
+        self.deep_index_dialog = QProgressDialog("Building deep library index...", "", 0, 100, self)
+        self.deep_index_dialog.setWindowTitle("Building Deep Index")
+        self.deep_index_dialog.setCancelButton(None)
+        self.deep_index_dialog.setAutoClose(False)
+        self.deep_index_dialog.setAutoReset(False)
+        self.deep_index_dialog.setMinimumDuration(0)
+        self.deep_index_dialog.setWindowModality(Qt.ApplicationModal)
+        self.deep_index_dialog.hide()
+
         mono = QFont("DejaVu Sans Mono", 10)
         self.chat_view.setFont(mono)
         self.input_box.setFont(mono)
@@ -405,7 +431,7 @@ class CelesteWindow(QMainWindow):
         self.add_directory_button.clicked.connect(self._choose_rag_directory)
         self.remove_directory_button.clicked.connect(self._remove_selected_rag_directory)
         self.reindex_button.clicked.connect(lambda: self.reindex_rag_requested.emit())
-        self.build_deep_button.clicked.connect(lambda: self.build_deep_index_requested.emit())
+        self.build_deep_button.clicked.connect(self._start_deep_index_build)
         self.engram_purge_button.clicked.connect(self._purge_engram_memory)
         self.engram_auto_toggle.toggled.connect(self._set_engram_auto_prune)
 
@@ -488,12 +514,14 @@ class CelesteWindow(QMainWindow):
         self.worker.reply_ready.connect(self._on_reply_ready)
         self.worker.failed.connect(self._on_failed)
         self.worker.status.connect(self._set_status)
+        self.worker.progress.connect(self._on_progress)
 
         self.worker_thread.start()
 
     def _set_busy(self, busy: bool, status: str | None = None) -> None:
         self.busy = busy
         self.send_button.setEnabled(not busy)
+        self.input_box.setEnabled(not busy)
         self.reload_button.setEnabled(not busy)
         self.refresh_models_button.setEnabled(not busy)
         self.add_directory_button.setEnabled(not busy)
@@ -503,12 +531,43 @@ class CelesteWindow(QMainWindow):
         self.engram_auto_toggle.setEnabled(not busy)
         self.engram_purge_combo.setEnabled(not busy)
         self.engram_purge_button.setEnabled(not busy)
+        self.model_combo.setEnabled(not busy)
+        self.tokens_spin.setEnabled(not busy)
+        self.tts_toggle.setEnabled(not busy)
+        self.memory_toggle.setEnabled(not busy)
+        self.reflection_toggle.setEnabled(not busy)
+        self.rag_dirs_list.setEnabled(not busy)
         if status:
             self.status_label.setText(status)
+        if not busy:
+            self._busy_reason = None
+            self._hide_progress_ui()
+
+    def _show_deep_index_progress(self, message: str, percent: int = 0) -> None:
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(max(0, min(100, int(percent))))
+        self.progress_bar.setFormat(f"{self.progress_bar.value()}%")
+        self.deep_index_dialog.setLabelText(message)
+        self.deep_index_dialog.setValue(max(0, min(100, int(percent))))
+        if not self.deep_index_dialog.isVisible():
+            self.deep_index_dialog.show()
+
+    def _hide_progress_ui(self) -> None:
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        if self.deep_index_dialog.isVisible():
+            self.deep_index_dialog.hide()
+        self.deep_index_dialog.setValue(0)
 
     @Slot(str)
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)
+
+    @Slot(int, str)
+    def _on_progress(self, percent: int, message: str) -> None:
+        if self._busy_reason == "deep_index":
+            self._show_deep_index_progress(message, percent)
 
     @Slot(object)
     def _on_initialized(self, cfg: object) -> None:
@@ -553,7 +612,8 @@ class CelesteWindow(QMainWindow):
         if self.cfg is not None:
             self._populate_from_config(self.cfg)
         self._append_system(message)
-        self._set_busy(False, "Library index updated.")
+        status = "Deep index ready." if self._busy_reason == "deep_index" else "Library index updated."
+        self._set_busy(False, status)
 
     @Slot(object, str)
     def _on_memory_updated(self, cfg: object, message: str) -> None:
@@ -730,8 +790,19 @@ class CelesteWindow(QMainWindow):
         self._set_busy(True, "Purging Engram memory...")
         self.purge_engram_requested.emit(seconds)
 
+    def _start_deep_index_build(self) -> None:
+        if self.busy:
+            return
+        self._busy_reason = "deep_index"
+        self._set_busy(True, "Building deep library index...")
+        self._show_deep_index_progress("Building deep library index...", 0)
+        self.build_deep_index_requested.emit()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.shutdown_requested.emit()
+        try:
+            QMetaObject.invokeMethod(self.worker, "shutdown", Qt.BlockingQueuedConnection)
+        except Exception:
+            self.shutdown_requested.emit()
         self.worker_thread.quit()
         self.worker_thread.wait(5000)
         super().closeEvent(event)
