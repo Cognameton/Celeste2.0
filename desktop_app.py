@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 import sys
+import traceback
 
 try:
     from PySide6.QtCore import QObject, QMetaObject, QThread, Qt, Signal, Slot
@@ -42,6 +44,32 @@ from config_types import AgentConfig
 from app_paths import default_config_path, resource_path
 
 
+def _setup_app_logging(config_path: str) -> str:
+    config_dir = os.path.dirname(os.path.abspath(config_path))
+    os.makedirs(config_dir, exist_ok=True)
+    log_path = os.path.join(config_dir, "celeste_desktop.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        filename=log_path,
+        filemode="a",
+        force=True,
+    )
+    return log_path
+
+
+def _install_exception_logging() -> None:
+    def _log_unhandled(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+        logging.critical(
+            "Unhandled exception:\n%s",
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+        )
+
+    sys.excepthook = _log_unhandled
+
+
 class ServiceWorker(QObject):
     initialized = Signal(object)
     models_ready = Signal(list)
@@ -65,6 +93,7 @@ class ServiceWorker(QObject):
             self.initialized.emit(cfg)
             self.status.emit("Celeste ready.")
         except Exception as exc:
+            logging.exception("Celeste backend initialization failed")
             self.failed.emit(str(exc))
 
     @Slot()
@@ -72,6 +101,7 @@ class ServiceWorker(QObject):
         try:
             self.models_ready.emit(self.service.available_models())
         except Exception as exc:
+            logging.exception("Model discovery failed")
             self.failed.emit(str(exc))
 
     @Slot(str)
@@ -85,6 +115,7 @@ class ServiceWorker(QObject):
                 self.service.speak(answer)
             self.status.emit("Ready.")
         except Exception as exc:
+            logging.exception("Chat request failed")
             self.failed.emit(str(exc))
 
     @Slot(object, bool)
@@ -97,6 +128,7 @@ class ServiceWorker(QObject):
             self.models_ready.emit(self.service.available_models())
             self.status.emit("Reload complete.")
         except Exception as exc:
+            logging.exception("Reload failed")
             self.failed.emit(str(exc))
 
     @Slot(str)
@@ -112,6 +144,7 @@ class ServiceWorker(QObject):
             self.rag_updated.emit(cfg, message)
             self.status.emit("File index updated.")
         except Exception as exc:
+            logging.exception("Adding RAG directory failed")
             self.failed.emit(str(exc))
 
     @Slot()
@@ -126,6 +159,7 @@ class ServiceWorker(QObject):
             self.rag_updated.emit(cfg, message)
             self.status.emit("File index updated.")
         except Exception as exc:
+            logging.exception("RAG reindex failed")
             self.failed.emit(str(exc))
 
     @Slot()
@@ -145,6 +179,7 @@ class ServiceWorker(QObject):
             self.progress.emit(100, "Deep index ready.")
             self.status.emit("Deep index ready.")
         except Exception as exc:
+            logging.exception("Deep index build failed")
             self.failed.emit(str(exc))
 
     @Slot(str)
@@ -159,6 +194,7 @@ class ServiceWorker(QObject):
             self.rag_updated.emit(cfg, message)
             self.status.emit("File access updated.")
         except Exception as exc:
+            logging.exception("Removing RAG directory failed")
             self.failed.emit(str(exc))
 
     @Slot()
@@ -180,6 +216,7 @@ class ServiceWorker(QObject):
             self.memory_updated.emit(cfg, message)
             self.status.emit("Engram memory updated.")
         except Exception as exc:
+            logging.exception("Engram purge failed")
             self.failed.emit(str(exc))
 
     @Slot(bool)
@@ -201,6 +238,7 @@ class ServiceWorker(QObject):
             self.memory_updated.emit(cfg, message)
             self.status.emit("Engram memory settings updated.")
         except Exception as exc:
+            logging.exception("Updating Engram auto-prune failed")
             self.failed.emit(str(exc))
 
 
@@ -843,11 +881,15 @@ class CelesteWindow(QMainWindow):
 
 
 def main() -> int:
+    config_path = default_config_path()
+    log_path = _setup_app_logging(config_path)
+    _install_exception_logging()
+    logging.info("Launching Celeste desktop app")
+    logging.info("Desktop log path: %s", log_path)
     app = QApplication(sys.argv)
     icon_path = resource_path("assets", "celeste_icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))
-    config_path = default_config_path()
     if not os.path.exists(config_path):
         from setup_wizard import ensure_config_with_wizard
 
