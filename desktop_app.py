@@ -7,14 +7,16 @@ import os
 import re
 import sys
 import traceback
+from collections import deque
 
 try:
-    from PySide6.QtCore import QObject, QMetaObject, QThread, Qt, Signal, Slot
+    from PySide6.QtCore import QObject, QMetaObject, QThread, QTimer, Qt, Signal, Slot
     from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
         QComboBox,
+        QDialog,
         QFileDialog,
         QFormLayout,
         QFrame,
@@ -44,15 +46,62 @@ from config_types import AgentConfig
 from app_paths import default_config_path, resource_path
 
 
+_LOG_BUFFER: deque[str] = deque(maxlen=1500)
+_LOG_EMITTER = None
+
+
+class LogEmitter(QObject):
+    message = Signal(str)
+
+
+class QtSignalLogHandler(logging.Handler):
+    def __init__(self, emitter: LogEmitter):
+        super().__init__(level=logging.INFO)
+        self.emitter = emitter
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            rendered = self.format(record)
+        except Exception:
+            rendered = record.getMessage()
+        _LOG_BUFFER.append(rendered)
+        try:
+            self.emitter.message.emit(rendered)
+        except Exception:
+            pass
+
+
+def _get_log_emitter() -> LogEmitter:
+    global _LOG_EMITTER
+    if _LOG_EMITTER is None:
+        _LOG_EMITTER = LogEmitter()
+    return _LOG_EMITTER
+
+
+class LiveLogDialog(QDialog):
+    closed = Signal()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 def _setup_app_logging(config_path: str) -> str:
     config_dir = os.path.dirname(os.path.abspath(config_path))
     os.makedirs(config_dir, exist_ok=True)
     log_path = os.path.join(config_dir, "celeste_desktop.log")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
+    qt_handler = QtSignalLogHandler(_get_log_emitter())
+    qt_handler.setFormatter(formatter)
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        filename=log_path,
-        filemode="a",
+        handlers=[file_handler, stream_handler, qt_handler],
         force=True,
     )
     return log_path
@@ -88,6 +137,7 @@ class ServiceWorker(QObject):
     @Slot()
     def initialize(self) -> None:
         try:
+            logging.info("Worker initialize requested.")
             self.status.emit("Starting Celeste backend...")
             cfg = self.service.start(status_cb=self.status.emit)
             self.initialized.emit(cfg)
@@ -99,6 +149,7 @@ class ServiceWorker(QObject):
     @Slot()
     def load_models(self) -> None:
         try:
+            logging.info("Worker model discovery requested.")
             self.models_ready.emit(self.service.available_models())
         except Exception as exc:
             logging.exception("Model discovery failed")
@@ -107,6 +158,7 @@ class ServiceWorker(QObject):
     @Slot(str)
     def send_message(self, message: str) -> None:
         try:
+            logging.info("Worker chat requested (chars=%s).", len(message or ""))
             self.status.emit("Generating reply...")
             answer, critique, improvements = self.service.chat(message)
             self.reply_ready.emit(answer, critique or "", improvements or "")
@@ -122,6 +174,7 @@ class ServiceWorker(QObject):
     def reload_config(self, overrides: object, persist: bool) -> None:
         try:
             data = dict(overrides) if isinstance(overrides, dict) else {}
+            logging.info("Worker reload requested (persist=%s).", persist)
             self.status.emit("Reloading Celeste with updated settings...")
             cfg = self.service.reload(data, persist=persist, status_cb=self.status.emit)
             self.reloaded.emit(cfg)
@@ -135,6 +188,7 @@ class ServiceWorker(QObject):
     def add_rag_directory(self, directory: str) -> None:
         try:
             active_path = os.path.abspath(os.path.expanduser(os.path.expandvars(directory)))
+            logging.info("Worker add RAG directory requested: %s", active_path)
             self.status.emit(f"Indexing files under {active_path}...")
             cfg, stats = self.service.add_rag_directory(directory)
             message = (
@@ -150,6 +204,7 @@ class ServiceWorker(QObject):
     @Slot()
     def reindex_rag(self) -> None:
         try:
+            logging.info("Worker RAG reindex requested.")
             self.status.emit("Reindexing file knowledge base...")
             cfg, stats = self.service.reindex_rag()
             message = (
@@ -165,6 +220,7 @@ class ServiceWorker(QObject):
     @Slot()
     def build_deep_index(self) -> None:
         try:
+            logging.info("Worker deep-index build requested.")
             def on_progress(message: str, percent: int = 0) -> None:
                 self.status.emit(message)
                 self.progress.emit(int(percent), message)
@@ -185,6 +241,7 @@ class ServiceWorker(QObject):
     @Slot(str)
     def remove_rag_directory(self, directory: str) -> None:
         try:
+            logging.info("Worker remove RAG directory requested: %s", directory)
             self.status.emit(f"Removing {directory} from Celeste file access...")
             cfg, stats = self.service.remove_rag_directory(directory)
             message = (
@@ -199,11 +256,13 @@ class ServiceWorker(QObject):
 
     @Slot()
     def shutdown(self) -> None:
+        logging.info("Worker shutdown requested.")
         self.service.shutdown()
 
     @Slot(object)
     def purge_engram_memory(self, seconds: object) -> None:
         try:
+            logging.info("Worker Engram purge requested: seconds=%s", seconds)
             purge_seconds = None if seconds is None else int(seconds)
             if purge_seconds is None:
                 self.status.emit("Purging all Engram memory...")
@@ -222,6 +281,7 @@ class ServiceWorker(QObject):
     @Slot(bool)
     def set_engram_auto_prune(self, enabled: bool) -> None:
         try:
+            logging.info("Worker Engram auto-prune requested: enabled=%s", enabled)
             self.status.emit(
                 "Enabling Engram auto-purge..." if enabled else "Disabling Engram auto-purge..."
             )
@@ -258,10 +318,13 @@ class CelesteWindow(QMainWindow):
     def __init__(self, config_path: str):
         super().__init__()
         self.config_path = config_path
+        self.log_path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "celeste_desktop.log")
         self.cfg: AgentConfig | None = None
         self.busy = False
         self._busy_reason: str | None = None
+        self._force_quit = False
         self._build_ui()
+        self._connect_live_log()
         self._build_worker()
         self.load_models_requested.emit()
         self.initialize_requested.emit()
@@ -392,15 +455,25 @@ class CelesteWindow(QMainWindow):
         rag_buttons.setColumnStretch(1, 1)
         settings_layout.addLayout(rag_buttons)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
+        button_grid = QGridLayout()
+        button_grid.setHorizontalSpacing(10)
+        button_grid.setVerticalSpacing(10)
         self.reload_button = QPushButton("Apply and Reload")
         self.refresh_models_button = QPushButton("Refresh Models")
+        self.live_log_button = QPushButton("Live Log")
+        self.live_log_button.setCheckable(True)
         self.shutdown_button = QPushButton("Shutdown Celeste")
-        button_row.addWidget(self.reload_button)
-        button_row.addWidget(self.refresh_models_button)
-        button_row.addWidget(self.shutdown_button)
-        settings_layout.addLayout(button_row)
+        for button in (
+            self.reload_button,
+            self.refresh_models_button,
+        ):
+            button.setMinimumHeight(30)
+            button.setMinimumWidth(0)
+        button_grid.addWidget(self.reload_button, 0, 0)
+        button_grid.addWidget(self.refresh_models_button, 0, 1)
+        button_grid.setColumnStretch(0, 1)
+        button_grid.setColumnStretch(1, 1)
+        settings_layout.addLayout(button_grid)
 
         self.status_label = QLabel("Starting...")
         self.status_label.setObjectName("statusLabel")
@@ -450,6 +523,10 @@ class CelesteWindow(QMainWindow):
         send_row.addWidget(self.send_button)
         send_row.addWidget(self.clear_button)
         send_row.addStretch(1)
+        self.live_log_button.setMinimumHeight(30)
+        self.shutdown_button.setMinimumHeight(30)
+        send_row.addWidget(self.live_log_button)
+        send_row.addWidget(self.shutdown_button)
         chat_layout.addLayout(send_row)
 
         layout.addWidget(settings_card, 0)
@@ -458,21 +535,37 @@ class CelesteWindow(QMainWindow):
         layout.setStretch(1, 1)
         self.setCentralWidget(root)
 
-        self.deep_index_dialog = QProgressDialog("Building deep library index...", "", 0, 100, self)
+        self.deep_index_dialog = QProgressDialog("Building deep library index...", "Force Shutdown", 0, 100, self)
         self.deep_index_dialog.setWindowTitle("Building Deep Index")
-        self.deep_index_dialog.setCancelButton(None)
         self.deep_index_dialog.setAutoClose(False)
         self.deep_index_dialog.setAutoReset(False)
         self.deep_index_dialog.setMinimumDuration(0)
-        self.deep_index_dialog.setWindowModality(Qt.ApplicationModal)
+        self.deep_index_dialog.setWindowModality(Qt.NonModal)
         self.deep_index_dialog.hide()
 
         mono = QFont("DejaVu Sans Mono", 10)
         self.chat_view.setFont(mono)
         self.input_box.setFont(mono)
 
+        self.log_dialog = LiveLogDialog(self)
+        self.log_dialog.setWindowTitle("Celeste Live Log")
+        self.log_dialog.resize(980, 520)
+        self.log_dialog.setModal(False)
+        dialog_layout = QVBoxLayout(self.log_dialog)
+        dialog_layout.setContentsMargins(14, 14, 14, 14)
+        dialog_layout.setSpacing(10)
+        dialog_hint = QLabel("Runtime status, backend steps, and exceptions stream here in real time.")
+        dialog_hint.setWordWrap(True)
+        dialog_layout.addWidget(dialog_hint)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.document().setMaximumBlockCount(1500)
+        self.log_view.setFont(mono)
+        dialog_layout.addWidget(self.log_view)
+
         self.reload_button.clicked.connect(self._apply_settings)
         self.refresh_models_button.clicked.connect(lambda: self.load_models_requested.emit())
+        self.live_log_button.toggled.connect(self._toggle_live_log)
         self.shutdown_button.clicked.connect(self._shutdown_app)
         self.send_button.clicked.connect(self._send_message)
         self.clear_button.clicked.connect(self.chat_view.clear)
@@ -482,6 +575,8 @@ class CelesteWindow(QMainWindow):
         self.build_deep_button.clicked.connect(self._start_deep_index_build)
         self.engram_purge_button.clicked.connect(self._purge_engram_memory)
         self.engram_auto_toggle.toggled.connect(self._set_engram_auto_prune)
+        self.log_dialog.closed.connect(self._on_log_dialog_closed)
+        self.deep_index_dialog.canceled.connect(self._shutdown_app)
 
         self._set_busy(True, "Starting Celeste...")
         self.setStyleSheet(
@@ -566,6 +661,28 @@ class CelesteWindow(QMainWindow):
 
         self.worker_thread.start()
 
+    def _connect_live_log(self) -> None:
+        emitter = _get_log_emitter()
+        emitter.message.connect(self._append_log_line)
+        for line in list(_LOG_BUFFER):
+            self._append_log_line(line)
+        self._append_log_line(f"Live desktop log: {self.log_path}")
+
+    @Slot(bool)
+    def _toggle_live_log(self, checked: bool) -> None:
+        if checked:
+            self.log_dialog.show()
+            self.log_dialog.raise_()
+            self.log_dialog.activateWindow()
+        else:
+            self.log_dialog.hide()
+
+    @Slot()
+    def _on_log_dialog_closed(self) -> None:
+        self.live_log_button.blockSignals(True)
+        self.live_log_button.setChecked(False)
+        self.live_log_button.blockSignals(False)
+
     def _set_busy(self, busy: bool, status: str | None = None) -> None:
         self.busy = busy
         self.send_button.setEnabled(not busy)
@@ -611,6 +728,7 @@ class CelesteWindow(QMainWindow):
     @Slot(str)
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)
+        logging.info("STATUS %s", text)
 
     @Slot(int, str)
     def _on_progress(self, percent: int, message: str) -> None:
@@ -727,6 +845,13 @@ class CelesteWindow(QMainWindow):
         self.chat_view.append(
             f"<div style='margin: 6px 0; color: #8da2b5;'><i>{html.escape(text)}</i></div>"
         )
+
+    @Slot(str)
+    def _append_log_line(self, text: str) -> None:
+        clean = (text or "").rstrip()
+        if not clean:
+            return
+        self.log_view.appendPlainText(clean)
 
     def _split_sources_block(self, text: str) -> tuple[str, list[str]]:
         match = re.search(r"\n\s*Sources:\s*\n", text or "")
@@ -847,6 +972,18 @@ class CelesteWindow(QMainWindow):
         self.build_deep_index_requested.emit()
 
     def _shutdown_app(self) -> None:
+        if self._busy_reason == "deep_index":
+            reply = QMessageBox.question(
+                self,
+                "Force Shutdown Celeste",
+                "Deep indexing is running. Force shutdown now? The partial deep-index build will be discarded.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self._force_terminate_app("Force shutdown requested during deep indexing.")
+            return
         if self.busy:
             reply = QMessageBox.question(
                 self,
@@ -870,7 +1007,44 @@ class CelesteWindow(QMainWindow):
         self._set_busy(True, "Shutting down Celeste...")
         self.close()
 
+    def _force_terminate_app(self, reason: str) -> None:
+        logging.warning(reason)
+        self._force_quit = True
+        self._hide_progress_ui()
+        self.status_label.setText("Force shutting down Celeste...")
+        try:
+            service = getattr(self.worker, "service", None)
+            agent = getattr(service, "agent", None)
+            if agent is not None:
+                try:
+                    agent.tts.shutdown()
+                except Exception:
+                    pass
+                try:
+                    agent.llm.shutdown()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.worker_thread.requestInterruption()
+        except Exception:
+            pass
+        try:
+            if self.worker_thread.isRunning():
+                self.worker_thread.terminate()
+                self.worker_thread.wait(1000)
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        QTimer.singleShot(250, lambda: os._exit(0))
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._force_quit:
+            event.accept()
+            return
         try:
             QMetaObject.invokeMethod(self.worker, "shutdown", Qt.BlockingQueuedConnection)
         except Exception:

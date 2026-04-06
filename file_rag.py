@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import gc
 import hashlib
 import json
 import logging
@@ -8,6 +9,8 @@ import math
 import os
 import re
 import subprocess
+import threading
+import time
 from typing import Any, Callable, Optional
 
 from joblib import dump, load
@@ -69,20 +72,16 @@ class FileRAG:
 
         shared_device_name = str(shared_device or "cpu").strip().lower()
         self._shared_device = shared_device_name or "cpu"
-        # Reusing the memory system's GPU embedder for a 400k-chunk deep-index build has
-        # proven fragile on both Linux and Windows. Keep file-RAG embeddings on a
-        # dedicated CPU path so deep-index builds are slower but stable and query-time
-        # semantic retrieval remains deterministic.
-        if shared_embedder is not None and self._shared_device != "cuda":
+        self._share_embedder = bool(getattr(self.cfg, "file_rag_share_embedder", False))
+        self.device = self._resolve_embedding_device()
+        if self._share_embedder and shared_embedder is not None and self._shared_device == self.device:
             self.embedder = shared_embedder
-            self.device = self._shared_device
             self._embedder_mode = "shared"
         else:
             self.embedder = None
-            self.device = "cpu"
-            self._embedder_mode = "dedicated-cpu"
-            if self._shared_device == "cuda":
-                logging.info("File RAG will use a dedicated CPU embedder instead of the shared CUDA embedder.")
+            self._embedder_mode = f"dedicated-{self.device}"
+            if shared_embedder is not None and self._shared_device == "cuda" and self.device == "cuda":
+                logging.info("File RAG will use a dedicated CUDA embedder instead of the shared memory embedder.")
 
         os.makedirs(cfg.data_dir, exist_ok=True)
 
@@ -157,6 +156,22 @@ class FileRAG:
             return os.path.abspath(model)
         return model
 
+    def _cuda_available(self) -> bool:
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
+    def _resolve_embedding_device(self) -> str:
+        requested = str(getattr(self.cfg, "file_rag_embedding_device", "auto") or "auto").strip().lower()
+        if requested == "cuda":
+            return "cuda" if self._cuda_available() else "cpu"
+        if requested == "cpu":
+            return "cpu"
+        return "cuda" if self._cuda_available() else "cpu"
+
     def _semantic_meta(self, *, enabled: bool, dim: int | None = None) -> dict[str, Any]:
         return {
             "enabled": enabled,
@@ -164,14 +179,27 @@ class FileRAG:
             "dim": int(dim) if dim is not None else None,
         }
 
+    def _release_embedder(self) -> None:
+        if self._embedder_mode == "shared" or self.embedder is None:
+            return
+        self.embedder = None
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def _ensure_embedder(self) -> bool:
         if not self._semantic_enabled():
             return False
         if self.embedder is not None:
             return True
-        try:
-            from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer
 
+        try:
             logging.info(
                 "Loading File RAG embedder from %s on device=%s (%s)",
                 self.cfg.embedding_model,
@@ -182,8 +210,19 @@ class FileRAG:
             logging.info("File RAG embedder ready (device=%s).", self.device)
             return True
         except Exception:
-            logging.exception("Failed to load File RAG embedder.")
+            logging.exception("Failed to load File RAG embedder on device=%s.", self.device)
             self.embedder = None
+            if self.device == "cuda":
+                logging.warning("Retrying File RAG embedder on CPU after CUDA load failure.")
+                self.device = "cpu"
+                self._embedder_mode = "dedicated-cpu"
+                try:
+                    self.embedder = SentenceTransformer(self.cfg.embedding_model, device=self.device)
+                    logging.info("File RAG embedder ready after CPU fallback.")
+                    return True
+                except Exception:
+                    logging.exception("CPU fallback also failed for File RAG embedder.")
+                    self.embedder = None
             return False
 
     def _encode_texts(self, texts: list[str], batch_size: int = FILE_RAG_SEMANTIC_BATCH_SIZE) -> np.ndarray:
@@ -780,6 +819,33 @@ class FileRAG:
         except TypeError:
             progress_cb(message)
 
+    def _run_with_stage_heartbeat(
+        self,
+        work: Callable[[], Any],
+        *,
+        stage_name: str,
+        progress_cb: Optional[Callable[..., None]],
+        progress_message: str,
+        percent: int,
+        heartbeat_seconds: float = 15.0,
+    ) -> Any:
+        stop_event = threading.Event()
+        start_time = time.time()
+
+        def heartbeat() -> None:
+            while not stop_event.wait(heartbeat_seconds):
+                elapsed = int(time.time() - start_time)
+                logging.info("%s still running (%ss elapsed).", stage_name, elapsed)
+                self._emit_deep_progress(progress_cb, f"{progress_message} ({elapsed}s elapsed)", percent)
+
+        thread = threading.Thread(target=heartbeat, name=f"celeste-{stage_name}-heartbeat", daemon=True)
+        thread.start()
+        try:
+            return work()
+        finally:
+            stop_event.set()
+            thread.join(timeout=0.2)
+
     def build_deep_index(
         self,
         progress_cb: Optional[Callable[[str], None]] = None,
@@ -791,6 +857,13 @@ class FileRAG:
         chunks: list[dict[str, Any]] = []
         files_indexed = 0
         total_files = len(self.files)
+        stale_tmp_path = self.deep_embeddings_path + ".tmp.npy"
+        try:
+            if os.path.exists(stale_tmp_path):
+                os.unlink(stale_tmp_path)
+                logging.info("Removed stale deep-index temp embedding file: %s", stale_tmp_path)
+        except OSError:
+            logging.warning("Could not remove stale deep-index temp embedding file: %s", stale_tmp_path)
         logging.info("Deep index build starting for %s files across %s directories.", total_files, len(self.directories))
         for idx, item in enumerate(self.files, start=1):
             if progress_cb and (idx == 1 or idx % 25 == 0 or idx == total_files):
@@ -826,7 +899,13 @@ class FileRAG:
 
         vectorizer = TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, max_df=0.92)
         logging.info("Deep index TF-IDF fit_transform starting for %s chunks.", len(chunks))
-        matrix = vectorizer.fit_transform([chunk["text"] for chunk in chunks])
+        matrix = self._run_with_stage_heartbeat(
+            lambda: vectorizer.fit_transform([chunk["text"] for chunk in chunks]),
+            stage_name="deep-tfidf",
+            progress_cb=progress_cb,
+            progress_message="Building deep TF-IDF index",
+            percent=60,
+        )
         logging.info("Deep index TF-IDF fit_transform complete.")
         self._emit_deep_progress(progress_cb, "Deep TF-IDF index complete. Preparing semantic index...", 62)
 
@@ -873,7 +952,18 @@ class FileRAG:
                         percent,
                     )
                 texts = [chunk["text"] for chunk in chunks[start:end]]
-                embeddings[start:end] = self._encode_texts(texts, batch_size=min(FILE_RAG_SEMANTIC_BATCH_SIZE, len(texts)))
+                batch_percent = 65 + round((end / max(len(chunks), 1)) * 30)
+                embeddings[start:end] = self._run_with_stage_heartbeat(
+                    lambda texts=texts: self._encode_texts(
+                        texts,
+                        batch_size=min(FILE_RAG_SEMANTIC_BATCH_SIZE, len(texts)),
+                    ),
+                    stage_name=f"deep-semantic-batch-{batch_index}",
+                    progress_cb=progress_cb,
+                    progress_message=f"Encoding semantic chunk embeddings {batch_index}/{total_batches}",
+                    percent=batch_percent,
+                    heartbeat_seconds=20.0,
+                )
             embeddings.flush()
             del embeddings
             os.replace(tmp_embeddings_path, self.deep_embeddings_path)
@@ -915,6 +1005,7 @@ class FileRAG:
         self._deep_embedding_matrix = (
             np.load(self.deep_embeddings_path, mmap_mode="r") if semantic_enabled and os.path.isfile(self.deep_embeddings_path) else None
         )
+        self._release_embedder()
 
         self._emit_deep_progress(progress_cb, "Deep index build complete.", 100)
         logging.info("Deep index build finished successfully.")

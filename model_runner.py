@@ -5,6 +5,7 @@ from config_types import AgentConfig
 import atexit
 import inspect
 import json
+import logging
 import os
 import re
 import shutil
@@ -243,6 +244,7 @@ class LLMRunner:
             raise ValueError(f"Unknown backend: {backend}")
 
     def _emit_status(self, message: str) -> None:
+        logging.info("LLM status: %s", message)
         if self._status_cb and message != self._last_status:
             self._last_status = message
             self._status_cb(message)

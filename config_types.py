@@ -34,6 +34,8 @@ class AgentConfig(BaseModel):
     file_rag_dirs: list[str] = Field(default_factory=list)
     file_rag_top_k: int = 4
     file_rag_use_embeddings: bool = False
+    file_rag_embedding_device: str = "auto"
+    file_rag_share_embedder: bool = False
 
     # Behavior
     system_preamble: str = "You are an offline agent."

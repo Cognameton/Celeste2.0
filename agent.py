@@ -1,6 +1,7 @@
 # agent.py — Celeste agent (chat-style prompt, strict stops, perspective guard)
 import os
 import json
+import logging
 import re
 from typing import Callable, Dict, Any, Tuple, Optional, List
 
@@ -84,6 +85,7 @@ class Agent:
         self._emit_status("Celeste startup complete.")
 
     def _emit_status(self, message: str) -> None:
+        logging.info("Agent status: %s", message)
         if self._status_cb:
             self._status_cb(message)
 

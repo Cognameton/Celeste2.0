@@ -104,3 +104,5 @@ file_rag_dirs:
   - /absolute/path/to/your/documents
 file_rag_top_k: 4
 file_rag_use_embeddings: true
+file_rag_embedding_device: auto
+file_rag_share_embedder: false
