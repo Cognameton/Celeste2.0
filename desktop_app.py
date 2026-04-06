@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import multiprocessing as mp
 import os
 import re
 import sys
@@ -710,19 +711,32 @@ class CelesteWindow(QMainWindow):
 
     def _show_deep_index_progress(self, message: str, percent: int = 0) -> None:
         self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(max(0, min(100, int(percent))))
-        self.progress_bar.setFormat(f"{self.progress_bar.value()}%")
+        if int(percent) < 0:
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat("Working...")
+        else:
+            bounded = max(0, min(100, int(percent)))
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(bounded)
+            self.progress_bar.setFormat(f"{bounded}%")
         self.deep_index_dialog.setLabelText(message)
-        self.deep_index_dialog.setValue(max(0, min(100, int(percent))))
+        if int(percent) < 0:
+            self.deep_index_dialog.setRange(0, 0)
+        else:
+            bounded = max(0, min(100, int(percent)))
+            self.deep_index_dialog.setRange(0, 100)
+            self.deep_index_dialog.setValue(bounded)
         if not self.deep_index_dialog.isVisible():
             self.deep_index_dialog.show()
 
     def _hide_progress_ui(self) -> None:
         self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
         if self.deep_index_dialog.isVisible():
             self.deep_index_dialog.hide()
+        self.deep_index_dialog.setRange(0, 100)
         self.deep_index_dialog.setValue(0)
 
     @Slot(str)
@@ -1055,6 +1069,7 @@ class CelesteWindow(QMainWindow):
 
 
 def main() -> int:
+    mp.freeze_support()
     config_path = default_config_path()
     log_path = _setup_app_logging(config_path)
     _install_exception_logging()

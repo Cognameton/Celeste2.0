@@ -36,6 +36,7 @@ class AgentConfig(BaseModel):
     file_rag_use_embeddings: bool = False
     file_rag_embedding_device: str = "auto"
     file_rag_share_embedder: bool = False
+    file_rag_multi_gpu: bool = True
 
     # Behavior
     system_preamble: str = "You are an offline agent."

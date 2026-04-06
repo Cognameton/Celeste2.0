@@ -73,6 +73,7 @@ class FileRAG:
         shared_device_name = str(shared_device or "cpu").strip().lower()
         self._shared_device = shared_device_name or "cpu"
         self._share_embedder = bool(getattr(self.cfg, "file_rag_share_embedder", False))
+        self._multi_gpu_enabled = bool(getattr(self.cfg, "file_rag_multi_gpu", True))
         self.device = self._resolve_embedding_device()
         if self._share_embedder and shared_embedder is not None and self._shared_device == self.device:
             self.embedder = shared_embedder
@@ -172,6 +173,21 @@ class FileRAG:
             return "cpu"
         return "cuda" if self._cuda_available() else "cpu"
 
+    def _cuda_device_list(self) -> list[str]:
+        if self.device != "cuda" or not self._multi_gpu_enabled:
+            return []
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return []
+            count = int(torch.cuda.device_count())
+        except Exception:
+            return []
+        if count <= 1:
+            return []
+        return [f"cuda:{idx}" for idx in range(count)]
+
     def _semantic_meta(self, *, enabled: bool, dim: int | None = None) -> dict[str, Any]:
         return {
             "enabled": enabled,
@@ -191,6 +207,28 @@ class FileRAG:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+    def _start_multi_gpu_pool(self) -> tuple[Any, list[str]] | tuple[None, list[str]]:
+        devices = self._cuda_device_list()
+        if len(devices) < 2:
+            return None, []
+        if not self._ensure_embedder():
+            raise RuntimeError("File RAG embedder unavailable")
+        try:
+            logging.info("Starting File RAG multi-process pool on devices: %s", ", ".join(devices))
+            pool = self.embedder.start_multi_process_pool(target_devices=devices)
+            return pool, devices
+        except Exception:
+            logging.exception("Failed to start File RAG multi-process pool. Falling back to single-device encode.")
+            return None, []
+
+    def _stop_multi_gpu_pool(self, pool: Any) -> None:
+        if pool is None or self.embedder is None:
+            return
+        try:
+            self.embedder.stop_multi_process_pool(pool)
+        except Exception:
+            logging.exception("Failed to stop File RAG multi-process pool cleanly.")
 
     def _ensure_embedder(self) -> bool:
         if not self._semantic_enabled():
@@ -225,19 +263,34 @@ class FileRAG:
                     self.embedder = None
             return False
 
-    def _encode_texts(self, texts: list[str], batch_size: int = FILE_RAG_SEMANTIC_BATCH_SIZE) -> np.ndarray:
+    def _encode_texts(
+        self,
+        texts: list[str],
+        batch_size: int = FILE_RAG_SEMANTIC_BATCH_SIZE,
+        *,
+        pool: Any = None,
+    ) -> np.ndarray:
         if not texts:
             dim = self._deep_embedding_dim or 0
             return np.empty((0, dim), dtype=np.float32)
         if not self._ensure_embedder():
             raise RuntimeError("File RAG embedder unavailable")
-        vec = self.embedder.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=False,
-            show_progress_bar=False,
-        )
+        if pool is not None:
+            vec = self.embedder.encode_multi_process(
+                texts,
+                pool=pool,
+                batch_size=batch_size,
+                normalize_embeddings=False,
+                show_progress_bar=False,
+            )
+        else:
+            vec = self.embedder.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=False,
+                show_progress_bar=False,
+            )
         arr = np.asarray(vec, dtype=np.float32)
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms = np.clip(norms, 1e-12, None)
@@ -813,7 +866,7 @@ class FileRAG:
     ) -> None:
         if progress_cb is None:
             return
-        bounded = max(0, min(100, int(percent)))
+        bounded = -1 if int(percent) < 0 else max(0, min(100, int(percent)))
         try:
             progress_cb(message, bounded)
         except TypeError:
@@ -904,7 +957,7 @@ class FileRAG:
             stage_name="deep-tfidf",
             progress_cb=progress_cb,
             progress_message="Building deep TF-IDF index",
-            percent=60,
+            percent=-1,
         )
         logging.info("Deep index TF-IDF fit_transform complete.")
         self._emit_deep_progress(progress_cb, "Deep TF-IDF index complete. Preparing semantic index...", 62)
@@ -933,37 +986,49 @@ class FileRAG:
                 dtype=np.float32,
                 shape=(len(chunks), semantic_dim),
             )
-            total_batches = max(1, math.ceil(len(chunks) / FILE_RAG_SEMANTIC_BATCH_SIZE))
-            for batch_index, start in enumerate(range(0, len(chunks), FILE_RAG_SEMANTIC_BATCH_SIZE), start=1):
-                end = min(len(chunks), start + FILE_RAG_SEMANTIC_BATCH_SIZE)
-                if batch_index == 1 or batch_index % 25 == 0 or end == len(chunks):
+            pool, pool_devices = self._start_multi_gpu_pool()
+            effective_batch_size = FILE_RAG_SEMANTIC_BATCH_SIZE * max(1, len(pool_devices)) if pool_devices else FILE_RAG_SEMANTIC_BATCH_SIZE
+            total_batches = max(1, math.ceil(len(chunks) / effective_batch_size))
+            try:
+                if pool_devices:
                     logging.info(
-                        "Deep semantic batch %s/%s (%s:%s).",
-                        batch_index,
-                        total_batches,
-                        start,
-                        end,
+                        "Deep semantic encoding using %s GPUs with effective batch size %s.",
+                        len(pool_devices),
+                        effective_batch_size,
                     )
-                if progress_cb and (batch_index == 1 or batch_index % 25 == 0 or end == len(chunks)):
-                    percent = 65 + round((end / max(len(chunks), 1)) * 30)
-                    self._emit_deep_progress(
-                        progress_cb,
-                        f"Encoding semantic chunk embeddings {batch_index}/{total_batches}...",
-                        percent,
+                for batch_index, start in enumerate(range(0, len(chunks), effective_batch_size), start=1):
+                    end = min(len(chunks), start + effective_batch_size)
+                    if batch_index == 1 or batch_index % 25 == 0 or end == len(chunks):
+                        logging.info(
+                            "Deep semantic batch %s/%s (%s:%s).",
+                            batch_index,
+                            total_batches,
+                            start,
+                            end,
+                        )
+                    if progress_cb and (batch_index == 1 or batch_index % 25 == 0 or end == len(chunks)):
+                        percent = 65 + round((end / max(len(chunks), 1)) * 30)
+                        self._emit_deep_progress(
+                            progress_cb,
+                            f"Encoding semantic chunk embeddings {batch_index}/{total_batches}...",
+                            percent,
+                        )
+                    texts = [chunk["text"] for chunk in chunks[start:end]]
+                    batch_percent = 65 + round((end / max(len(chunks), 1)) * 30)
+                    embeddings[start:end] = self._run_with_stage_heartbeat(
+                        lambda texts=texts, pool=pool: self._encode_texts(
+                            texts,
+                            batch_size=min(FILE_RAG_SEMANTIC_BATCH_SIZE, len(texts)),
+                            pool=pool,
+                        ),
+                        stage_name=f"deep-semantic-batch-{batch_index}",
+                        progress_cb=progress_cb,
+                        progress_message=f"Encoding semantic chunk embeddings {batch_index}/{total_batches}",
+                        percent=batch_percent,
+                        heartbeat_seconds=20.0,
                     )
-                texts = [chunk["text"] for chunk in chunks[start:end]]
-                batch_percent = 65 + round((end / max(len(chunks), 1)) * 30)
-                embeddings[start:end] = self._run_with_stage_heartbeat(
-                    lambda texts=texts: self._encode_texts(
-                        texts,
-                        batch_size=min(FILE_RAG_SEMANTIC_BATCH_SIZE, len(texts)),
-                    ),
-                    stage_name=f"deep-semantic-batch-{batch_index}",
-                    progress_cb=progress_cb,
-                    progress_message=f"Encoding semantic chunk embeddings {batch_index}/{total_batches}",
-                    percent=batch_percent,
-                    heartbeat_seconds=20.0,
-                )
+            finally:
+                self._stop_multi_gpu_pool(pool)
             embeddings.flush()
             del embeddings
             os.replace(tmp_embeddings_path, self.deep_embeddings_path)
