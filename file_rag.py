@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -66,8 +67,22 @@ class FileRAG:
         self._deep_embedding_matrix = None
         self._deep_embedding_dim: int | None = None
 
-        self.embedder = shared_embedder
-        self.device = shared_device or "cpu"
+        shared_device_name = str(shared_device or "cpu").strip().lower()
+        self._shared_device = shared_device_name or "cpu"
+        # Reusing the memory system's GPU embedder for a 400k-chunk deep-index build has
+        # proven fragile on both Linux and Windows. Keep file-RAG embeddings on a
+        # dedicated CPU path so deep-index builds are slower but stable and query-time
+        # semantic retrieval remains deterministic.
+        if shared_embedder is not None and self._shared_device != "cuda":
+            self.embedder = shared_embedder
+            self.device = self._shared_device
+            self._embedder_mode = "shared"
+        else:
+            self.embedder = None
+            self.device = "cpu"
+            self._embedder_mode = "dedicated-cpu"
+            if self._shared_device == "cuda":
+                logging.info("File RAG will use a dedicated CPU embedder instead of the shared CUDA embedder.")
 
         os.makedirs(cfg.data_dir, exist_ok=True)
 
@@ -157,9 +172,17 @@ class FileRAG:
         try:
             from sentence_transformers import SentenceTransformer
 
+            logging.info(
+                "Loading File RAG embedder from %s on device=%s (%s)",
+                self.cfg.embedding_model,
+                self.device,
+                self._embedder_mode,
+            )
             self.embedder = SentenceTransformer(self.cfg.embedding_model, device=self.device)
+            logging.info("File RAG embedder ready (device=%s).", self.device)
             return True
         except Exception:
+            logging.exception("Failed to load File RAG embedder.")
             self.embedder = None
             return False
 
@@ -768,6 +791,7 @@ class FileRAG:
         chunks: list[dict[str, Any]] = []
         files_indexed = 0
         total_files = len(self.files)
+        logging.info("Deep index build starting for %s files across %s directories.", total_files, len(self.directories))
         for idx, item in enumerate(self.files, start=1):
             if progress_cb and (idx == 1 or idx % 25 == 0 or idx == total_files):
                 percent = max(1, round((idx / max(total_files, 1)) * 55))
@@ -782,6 +806,8 @@ class FileRAG:
             for chunk_index, chunk in enumerate(self._chunk_text(text)):
                 chunks.append(self._build_chunk_record(item, chunk_index, chunk))
             files_indexed += 1
+
+        logging.info("Deep index chunking complete: %s readable files -> %s chunks.", files_indexed, len(chunks))
 
         self._emit_deep_progress(
             progress_cb,
@@ -799,11 +825,15 @@ class FileRAG:
             }
 
         vectorizer = TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, max_df=0.92)
+        logging.info("Deep index TF-IDF fit_transform starting for %s chunks.", len(chunks))
         matrix = vectorizer.fit_transform([chunk["text"] for chunk in chunks])
+        logging.info("Deep index TF-IDF fit_transform complete.")
+        self._emit_deep_progress(progress_cb, "Deep TF-IDF index complete. Preparing semantic index...", 62)
 
         semantic_enabled = self._semantic_enabled() and self._ensure_embedder()
         semantic_dim: int | None = None
         if self._semantic_enabled() and not semantic_enabled:
+            logging.warning("Semantic retrieval requested, but File RAG embedder was unavailable. Continuing with TF-IDF only.")
             self._emit_deep_progress(
                 progress_cb,
                 "Semantic retrieval is enabled, but the embedding model could not be loaded. Building TF-IDF only.",
@@ -811,6 +841,12 @@ class FileRAG:
             )
         if semantic_enabled:
             semantic_dim = int(self.embedder.get_sentence_embedding_dimension())
+            logging.info(
+                "Deep semantic index starting with device=%s, dim=%s, batch_size=%s.",
+                self.device,
+                semantic_dim,
+                FILE_RAG_SEMANTIC_BATCH_SIZE,
+            )
             tmp_embeddings_path = self.deep_embeddings_path + ".tmp.npy"
             embeddings = np.lib.format.open_memmap(
                 tmp_embeddings_path,
@@ -821,6 +857,14 @@ class FileRAG:
             total_batches = max(1, math.ceil(len(chunks) / FILE_RAG_SEMANTIC_BATCH_SIZE))
             for batch_index, start in enumerate(range(0, len(chunks), FILE_RAG_SEMANTIC_BATCH_SIZE), start=1):
                 end = min(len(chunks), start + FILE_RAG_SEMANTIC_BATCH_SIZE)
+                if batch_index == 1 or batch_index % 25 == 0 or end == len(chunks):
+                    logging.info(
+                        "Deep semantic batch %s/%s (%s:%s).",
+                        batch_index,
+                        total_batches,
+                        start,
+                        end,
+                    )
                 if progress_cb and (batch_index == 1 or batch_index % 25 == 0 or end == len(chunks)):
                     percent = 65 + round((end / max(len(chunks), 1)) * 30)
                     self._emit_deep_progress(
@@ -833,6 +877,7 @@ class FileRAG:
             embeddings.flush()
             del embeddings
             os.replace(tmp_embeddings_path, self.deep_embeddings_path)
+            logging.info("Deep semantic index build complete.")
         else:
             try:
                 if os.path.exists(self.deep_embeddings_path):
@@ -841,6 +886,7 @@ class FileRAG:
                 pass
 
         self._emit_deep_progress(progress_cb, "Finalizing deep index files...", 97)
+        logging.info("Deep index finalizing on-disk artifacts.")
 
         with gzip.open(self.deep_chunks_path, "wt", encoding="utf-8") as f:
             json.dump(chunks, f)
@@ -871,6 +917,7 @@ class FileRAG:
         )
 
         self._emit_deep_progress(progress_cb, "Deep index build complete.", 100)
+        logging.info("Deep index build finished successfully.")
 
         return {
             "directories": list(self.directories),
