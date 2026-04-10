@@ -75,7 +75,15 @@ class FileRAG:
         self._share_embedder = bool(getattr(self.cfg, "file_rag_share_embedder", False))
         self._multi_gpu_enabled = bool(getattr(self.cfg, "file_rag_multi_gpu", True))
         self.device = self._resolve_embedding_device()
-        if self._share_embedder and shared_embedder is not None and self._shared_device == self.device:
+        # On CPU, always reuse the shared embedder when devices match — loading a
+        # second instance of the same model deadlocks on Windows.  On CUDA the
+        # explicit flag still controls sharing since VRAM allocation matters there.
+        _auto_share_cpu = (
+            shared_embedder is not None
+            and self._shared_device == self.device
+            and self.device == "cpu"
+        )
+        if (self._share_embedder or _auto_share_cpu) and shared_embedder is not None and self._shared_device == self.device:
             self.embedder = shared_embedder
             self._embedder_mode = "shared"
         else:
@@ -902,6 +910,8 @@ class FileRAG:
     def build_deep_index(
         self,
         progress_cb: Optional[Callable[[str], None]] = None,
+        pre_semantic_cb: Optional[Callable[[], None]] = None,
+        post_semantic_cb: Optional[Callable[[], None]] = None,
     ) -> dict[str, Any]:
         if not self.directories:
             self._invalidate_deep_index()
@@ -935,12 +945,6 @@ class FileRAG:
 
         logging.info("Deep index chunking complete: %s readable files -> %s chunks.", files_indexed, len(chunks))
 
-        self._emit_deep_progress(
-            progress_cb,
-            f"Building deep TF-IDF index from {len(chunks)} chunks...",
-            60,
-        )
-
         if not chunks:
             self._invalidate_deep_index()
             return {
@@ -949,6 +953,41 @@ class FileRAG:
                 "chunks_indexed": 0,
                 "deep_index_ready": False,
             }
+
+        # Load the embedding model BEFORE TF-IDF runs.  On Windows, sklearn's
+        # TF-IDF leaves the OpenBLAS/OpenMP thread pool in an indeterminate
+        # state; loading PyTorch/SentenceTransformer afterwards deadlocks.
+        # Loading first (in a clean context) avoids the conflict entirely.
+        if self._semantic_enabled() and pre_semantic_cb is not None:
+            pre_semantic_cb()
+        semantic_enabled = self._semantic_enabled() and self._ensure_embedder()
+        semantic_dim: int | None = None
+        if self._semantic_enabled() and not semantic_enabled:
+            logging.warning("Semantic retrieval requested, but File RAG embedder was unavailable. Continuing with TF-IDF only.")
+            self._emit_deep_progress(
+                progress_cb,
+                "Semantic retrieval is enabled, but the embedding model could not be loaded. Building TF-IDF only.",
+                70,
+            )
+
+        if semantic_enabled:
+            # Warm up PyTorch's thread pool with a single dummy encode BEFORE
+            # TF-IDF runs.  PyTorch lazily initializes its intra-op thread pool
+            # on the first BLAS call.  On Windows, if that first call happens
+            # after sklearn TF-IDF has used OpenBLAS, the two thread pools
+            # deadlock.  Doing a trivial encode here primes the pool in a clean
+            # state so the real encoding loop has nothing to initialize.
+            try:
+                self.embedder.encode(["warmup"], batch_size=1, show_progress_bar=False)
+                logging.info("Deep index embedder thread pool warmup complete.")
+            except Exception as _warmup_exc:
+                logging.warning("Deep index embedder warmup failed (non-fatal): %s", _warmup_exc)
+
+        self._emit_deep_progress(
+            progress_cb,
+            f"Building deep TF-IDF index from {len(chunks)} chunks...",
+            60,
+        )
 
         vectorizer = TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, max_df=0.92)
         logging.info("Deep index TF-IDF fit_transform starting for %s chunks.", len(chunks))
@@ -960,17 +999,8 @@ class FileRAG:
             percent=-1,
         )
         logging.info("Deep index TF-IDF fit_transform complete.")
-        self._emit_deep_progress(progress_cb, "Deep TF-IDF index complete. Preparing semantic index...", 62)
+        self._emit_deep_progress(progress_cb, "Deep TF-IDF index complete. Preparing semantic encoding...", 62)
 
-        semantic_enabled = self._semantic_enabled() and self._ensure_embedder()
-        semantic_dim: int | None = None
-        if self._semantic_enabled() and not semantic_enabled:
-            logging.warning("Semantic retrieval requested, but File RAG embedder was unavailable. Continuing with TF-IDF only.")
-            self._emit_deep_progress(
-                progress_cb,
-                "Semantic retrieval is enabled, but the embedding model could not be loaded. Building TF-IDF only.",
-                70,
-            )
         if semantic_enabled:
             semantic_dim = int(self.embedder.get_sentence_embedding_dimension())
             logging.info(
@@ -1071,6 +1101,8 @@ class FileRAG:
             np.load(self.deep_embeddings_path, mmap_mode="r") if semantic_enabled and os.path.isfile(self.deep_embeddings_path) else None
         )
         self._release_embedder()
+        if post_semantic_cb is not None:
+            post_semantic_cb()
 
         self._emit_deep_progress(progress_cb, "Deep index build complete.", 100)
         logging.info("Deep index build finished successfully.")

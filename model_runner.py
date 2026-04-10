@@ -619,6 +619,96 @@ class LLMRunner:
         if self.backend == "llama_server":
             self._cleanup_server()
 
+    # ---------------- GPU time-sharing ----------------
+
+    def offload_from_gpu(self) -> bool:
+        """
+        Temporarily release GPU VRAM so another component can use the GPU.
+        Reloads the model on CPU (n_gpu_layers=0 for llama_cpp, .to('cpu') for
+        transformers).  llama_server runs out-of-process with its own CUDA
+        context, so no action is needed there.
+        Returns True if a GPU offload was actually performed.
+        """
+        if getattr(self, "_gpu_offloaded", False):
+            return False  # Already offloaded
+
+        if self.backend == "llama_cpp":
+            n_gpu = getattr(self.cfg, "n_gpu_layers", 0)
+            if not n_gpu:
+                return False  # Already CPU-only
+            import gc as _gc
+            logging.info(
+                "LLM GPU offload: reloading llama_cpp with n_gpu_layers=0 "
+                "to free VRAM (was n_gpu_layers=%s).",
+                n_gpu,
+            )
+            self._saved_n_gpu_layers = n_gpu
+            del self.llm
+            _gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            self.cfg.n_gpu_layers = 0
+            self._init_llama_cpp()
+            self._gpu_offloaded = True
+            return True
+
+        if self.backend == "transformers":
+            model = getattr(self, "model", None)
+            if model is None:
+                return False
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    return False
+                logging.info("LLM GPU offload: moving transformers model to CPU.")
+                model.to("cpu")
+                torch.cuda.empty_cache()
+                self._gpu_offloaded = True
+                return True
+            except Exception:
+                logging.exception("Failed to offload transformers model to CPU.")
+                return False
+
+        # llama_server: out-of-process, CUDA context is separate — no action needed.
+        return False
+
+    def restore_to_gpu(self) -> None:
+        """
+        Restore GPU usage after a previous offload_from_gpu() call.
+        No-op if no offload was performed.
+        """
+        if not getattr(self, "_gpu_offloaded", False):
+            return
+
+        if self.backend == "llama_cpp":
+            import gc as _gc
+            self.cfg.n_gpu_layers = getattr(self, "_saved_n_gpu_layers", -1)
+            logging.info(
+                "LLM GPU restore: reloading llama_cpp with n_gpu_layers=%s.",
+                self.cfg.n_gpu_layers,
+            )
+            del self.llm
+            _gc.collect()
+            self._init_llama_cpp()
+            self._gpu_offloaded = False
+
+        elif self.backend == "transformers":
+            model = getattr(self, "model", None)
+            if model is None:
+                return
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    logging.info("LLM GPU restore: moving transformers model back to CUDA.")
+                    model.to("cuda")
+                self._gpu_offloaded = False
+            except Exception:
+                logging.exception("Failed to restore transformers model to GPU.")
+
     # ---------------- utilities ----------------
     def count_tokens(self, text: str) -> int:
         try:

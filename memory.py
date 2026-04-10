@@ -18,6 +18,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from config_types import AgentConfig
+from graph_memory import GraphMemory
 
 # Keep tokenizer threads quiet
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -326,6 +327,11 @@ class MemoryPipeline:
             retention_days=int(memory_cfg.get("engram_retention_days", DEFAULT_ENGRAM_RETENTION_DAYS)),
             keep_min_uses=int(memory_cfg.get("engram_keep_min_uses", DEFAULT_ENGRAM_KEEP_MIN_USES)),
         )
+        graph_path = os.path.join(self.cfg.data_dir, "memory_graph.db")
+        self.graph = GraphMemory(
+            graph_path,
+            enabled=bool(memory_cfg.get("graph_enabled", True)),
+        )
 
         # Ensure JSON store exists
         if not os.path.exists(self.json_path):
@@ -346,7 +352,16 @@ class MemoryPipeline:
                 # Detect CUDA for embeddings (Torch 2.6+cu124 in your venv)
                 try:
                     import torch as _torch  # noqa: F401
-                    self.device = "cuda" if _torch.cuda.is_available() else "cpu"
+                    cuda_available = _torch.cuda.is_available()
+                    # With llama_cpp (in-process), GGML and PyTorch share the
+                    # same CUDA context on Windows, causing instability when
+                    # both run concurrently during chat.  Force memory
+                    # embeddings to CPU in that case.  llama_server runs
+                    # out-of-process with its own CUDA context, so PyTorch
+                    # CUDA is safe to use there.
+                    _backend = str(getattr(self.cfg, "backend", "") or "").strip().lower()
+                    _win_cpp_conflict = os.name == "nt" and _backend == "llama_cpp"
+                    self.device = "cpu" if _win_cpp_conflict else ("cuda" if cuda_available else "cpu")
                 except Exception:
                     self.device = "cpu"
 
@@ -468,6 +483,9 @@ class MemoryPipeline:
 
     def search_engram(self, query: str, top_k: int = 5, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         return self.engram.search(query, top_k=top_k, kinds=kinds)
+
+    def search_graph(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        return self.graph.search(query, top_k=top_k)
 
     def purge_engram(self, seconds: int | None = None) -> dict[str, int | bool]:
         return self.engram.purge_recent(seconds=seconds)

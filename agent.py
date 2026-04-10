@@ -14,6 +14,11 @@ from file_rag import FileRAG, FILE_RAG_INDEX_KIND_SEMANTIC, FILE_RAG_INDEX_KIND_
 from reflection import Reflector
 from playbook import Playbook
 from tts import TTSManager
+from graph_facts import (
+    record_runtime_graph_facts,
+    record_file_rag_graph_facts,
+    record_deep_index_graph_facts,
+)
 
 console = Console()
 
@@ -71,10 +76,18 @@ class Agent:
             shared_embedder=getattr(self.mem, "embedder", None),
             shared_device=getattr(self.mem, "device", "cpu"),
         )
+        record_runtime_graph_facts(self.mem, cfg)
+        record_file_rag_graph_facts(self.mem, cfg, self.file_rag)
         self._emit_status("Starting reflection tools...")
         self.reflector = Reflector(self.llm, cfg)
         self._emit_status("Starting playbook and speech...")
-        self.playbook = Playbook(os.path.join(cfg.data_dir, "playbook.md"))
+        _reflection_cfg = dict(getattr(cfg, "reflection", {}) or {})
+        self.playbook = Playbook(
+            os.path.join(cfg.data_dir, "rulebook.json"),
+            threshold=int(_reflection_cfg.get("rulebook_threshold", 20)),
+            max_rules=int(_reflection_cfg.get("max_rules", 30)),
+        )
+        self.reflection_flag_cb: Callable[[str], None] | None = None
         self.tts = TTSManager(cfg)
 
         # Self-state (identity/focus/etc.)
@@ -95,13 +108,19 @@ class Agent:
         except Exception:
             pass
         try:
+            self.reflector.shutdown()
+        except Exception:
+            pass
+        try:
             self.llm.shutdown()
         except Exception:
             pass
 
     def set_file_rag_dirs(self, directories: List[str]) -> Dict[str, Any]:
         self.cfg.file_rag_dirs = directories
-        return self.file_rag.rebuild(directories)
+        stats = self.file_rag.rebuild(directories)
+        record_file_rag_graph_facts(self.mem, self.cfg, self.file_rag)
+        return stats
 
     def reindex_file_rag(self) -> Dict[str, Any]:
         return self.file_rag.rebuild(self.cfg.file_rag_dirs)
@@ -174,9 +193,20 @@ class Agent:
             pass
 
     # ---------- Prompt pieces ----------
-    def build_system_prompt(self) -> str:
+    def _on_reflection_add(self, text: str) -> None:
+        self.playbook.add_rule(text, source="teacher")
+
+    def _on_reflection_update(self, index: int, text: str) -> None:
+        self.playbook.update_by_index(index, text)
+
+    def _on_reflection_flag(self, reason: str) -> None:
+        logging.info("Reflector flagged rulebook: %s", reason)
+        if callable(getattr(self, "reflection_flag_cb", None)):
+            self.reflection_flag_cb(reason)
+
+    def build_system_prompt(self, query: str = "") -> str:
         self_state = self._load_self_state()
-        playbook_text = self.playbook.read().strip()
+        playbook_text = self.playbook.format_for_prompt(query=query, top_k=5).strip()
 
         parts: List[str] = [
             (self.cfg.system_preamble or "").strip(),
@@ -816,6 +846,25 @@ class Agent:
                 labels.append(label)
         return labels
 
+    def _requested_reference_count(self, user_msg: str) -> int | None:
+        text = (user_msg or "").lower()
+        if not any(term in text for term in ("reference", "references", "source", "sources", "citation", "citations")):
+            return None
+        word_counts = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+        }
+        for word, count in word_counts.items():
+            if re.search(rf"\b{word}\b", text):
+                return count
+        match = re.search(r"\b([1-5])\b", text)
+        if match:
+            return int(match.group(1))
+        return None
+
     def _sanitize_answer_citations(self, answer: str, max_label: int) -> str:
         if not answer:
             return ""
@@ -988,6 +1037,20 @@ class Agent:
             self._append_recent_turn("assistant", tracked_recall_reply)
             return tracked_recall_reply, None, None
 
+        # Command: rule: <text>  — add directly to the behavioral rulebook
+        if u_low.startswith("rule:"):
+            rule_text = u_strip[len("rule:"):].strip()
+            if rule_text:
+                self.playbook.add_rule(rule_text, source="user")
+                reply = "Rule added to playbook."
+            else:
+                reply = "What rule should I add?"
+            self.mem.add(user, kind="user")
+            self.mem.add(reply, kind="assistant")
+            self._append_recent_turn("user", user)
+            self._append_recent_turn("assistant", reply)
+            return reply, None, None
+
         # Command: remember this: <note>
         if u_low.startswith("remember this:") or u_low.startswith("remember:"):
             note = u_strip.split(":", 1)[1].strip() if ":" in u_strip else u_strip
@@ -1020,8 +1083,10 @@ class Agent:
             top_k=max(1, min(self.cfg.top_k, 4)),
             kinds=["note", "user"],
         )
+        raw_graph_mems = self.mem.search_graph(user, top_k=4)
         mem_texts = [m["text"] for m in raw_mems]
         pattern_mem_texts = [m["text"] for m in raw_pattern_mems]
+        graph_mem_texts = [m["text"] for m in raw_graph_mems]
         rag_top_k = max(1, min(getattr(self.cfg, "file_rag_top_k", 4), 6 if library_requested else 4))
         file_context = (
             self.file_rag.get_context(
@@ -1068,7 +1133,7 @@ class Agent:
         self._maybe_update_identity(u_strip)
 
         # Prepare system + trimmed memory notes with a strict budget (~25% of context)
-        system = self.build_system_prompt()
+        system = self.build_system_prompt(query=u_strip)
         mem_token_budget = max(24, int(self.cfg.n_ctx * (0.04 if broad_library_summary else 0.15)))
         file_token_budget = max(96, int(self.cfg.n_ctx * (0.12 if broad_library_summary else 0.20)))
         history_token_budget = max(128, int(self.cfg.n_ctx * (0.22 if broad_library_summary else 0.30)))
@@ -1078,6 +1143,7 @@ class Agent:
         )
         merged_memory_texts = self._dedupe_texts(pattern_mem_texts + mem_texts)
         pattern_token_budget = max(32, int(self.cfg.n_ctx * (0.04 if broad_library_summary else 0.08)))
+        graph_token_budget = max(24, int(self.cfg.n_ctx * (0.02 if broad_library_summary else 0.04)))
         kept_pattern_snippets = self._truncate_for_budget(
             pattern_mem_texts,
             token_budget=pattern_token_budget,
@@ -1090,6 +1156,11 @@ class Agent:
                 if text not in kept_pattern_snippets
             ],
             token_budget=mem_token_budget,
+        )
+        kept_graph_snippets = self._truncate_for_budget(
+            self._dedupe_texts(graph_mem_texts),
+            token_budget=graph_token_budget,
+            per_snippet_chars=200,
         )
         grounding_sources = self._select_grounding_sources(
             file_context,
@@ -1123,6 +1194,8 @@ class Agent:
             note_sections.append("Pattern Memory:\n" + "\n".join(f"- {s}" for s in kept_pattern_snippets))
         if kept_snippets:
             note_sections.append("Notes:\n" + "\n".join(f"- {s}" for s in kept_snippets))
+        if kept_graph_snippets:
+            note_sections.append("Knowledge Graph:\n" + "\n".join(f"- {s}" for s in kept_graph_snippets))
         if grounding_note and not broad_library_summary:
             source_files = []
             seen_files: set[str] = set()
@@ -1158,6 +1231,7 @@ class Agent:
             or bool(opened_file)
             or bool(library_hits)
         )
+        requested_reference_count = self._requested_reference_count(u_strip)
         base_instruction_lines = [
             "Answer the user's message succinctly. Output ONLY the answer text. No quotes, no headings, no code fences.",
             "Reply in the same language as the user's message. If the user wrote in English, reply in English.",
@@ -1165,8 +1239,12 @@ class Agent:
         ]
         if library_requested:
             if grounding_sources:
-                base_instruction_lines.append(
-                    "Use the retrieved grounding sources when answering. Prefer them over general background knowledge."
+                base_instruction_lines.extend(
+                    [
+                        "In this app, 'the library' means the indexed local document library, not a public library building or institution.",
+                        "Use the retrieved grounding sources when answering. Prefer them over general background knowledge.",
+                        "If the retrieved sources only support part of the answer, cite that part and state that the indexed support is limited.",
+                    ]
                 )
             else:
                 base_instruction_lines.append(
@@ -1195,6 +1273,7 @@ class Agent:
                     "When you use a grounding source, cite it inline with its exact label like [1] or [2].",
                     "Do not invent citations or cite labels that were not provided.",
                     "General background statements that do not come from the grounding sources do not need citations.",
+                    "Do not use Markdown bold or asterisks in cited library answers.",
                 ]
             )
         citation_tail_budget = 0
@@ -1277,7 +1356,13 @@ Assistant:"""
 
         # Build prompt and ensure it fits the window
         prompt, max_new = prep_prompt(notes_block)
-        use_chat_api = getattr(self.llm, "backend", "") == "llama_server" and hasattr(self.llm, "chat")
+        model_name = os.path.basename(str(getattr(self.cfg, "model_path", "") or "")).lower()
+        disable_server_chat_template = "neko-chat" in model_name
+        use_chat_api = (
+            getattr(self.llm, "backend", "") == "llama_server"
+            and hasattr(self.llm, "chat")
+            and not disable_server_chat_template
+        )
 
         # Strict stops to prevent prompt echo and code sprawl
         stop = [
@@ -1347,8 +1432,11 @@ Assistant:"""
 
         if require_citations and not self._citation_labels(answer, max_label=len(grounding_sources)):
             extra_instruction = (
-                "Revise the answer so that claims drawn from the grounding sources cite the provided labels inline, "
-                "for example [1] or [2]. If the sources are insufficient, say that clearly."
+                "Revise the answer using the indexed local library sources that were provided. "
+                "If a retrieved source supports a useful claim, cite that claim inline with its exact label, for example [1] or [2]. "
+                "Do not interpret 'library' as a public institution. "
+                "If the retrieved sources only support part of the user's request, give that limited supported answer with citations and say the indexed support is limited. "
+                "Do not answer generically without citations."
             )
             retry_prompt, retry_max_new = prep_prompt(notes_block, extra_instruction=extra_instruction, prior_attempt=answer)
             retry_messages = make_messages(notes_block, extra_instruction=extra_instruction, prior_attempt=answer)
@@ -1376,6 +1464,52 @@ Assistant:"""
             answer = self._enforce_perspective(user, retry_answer)
             answer = self._sanitize_answer_style(answer)
             answer = self._sanitize_answer_citations(answer, max_label=len(grounding_sources))
+
+        citation_instruction_artifact = require_citations and any(
+            phrase in answer.lower()
+            for phrase in (
+                "cite if",
+                "cite  if",
+                "if applicable",
+                "if this section",
+                "find specific steps",
+                "look up how to",
+                "chunks in the index",
+                "chunks in the indexed",
+                "labeled [",
+                "provide the references needed",
+            )
+        )
+        insufficient_requested_references = (
+            require_citations
+            and requested_reference_count is not None
+            and len(grounding_sources) < requested_reference_count
+        )
+        if (
+            require_citations
+            and grounding_sources
+            and (
+                not self._citation_labels(answer, max_label=len(grounding_sources))
+                or citation_instruction_artifact
+                or insufficient_requested_references
+            )
+        ):
+            source = grounding_sources[0]
+            label = int(source.get("label", 1) or 1)
+            excerpt = str(source.get("text", "") or "").replace("\n", " ").strip()
+            if len(excerpt) > 320:
+                excerpt = excerpt[:320].rstrip() + "..."
+            rel_path = str(source.get("rel_path") or "the indexed library").strip()
+            prefix = (
+                f"I found {len(grounding_sources)} relevant indexed reference, not the {requested_reference_count} requested. "
+                if insufficient_requested_references and requested_reference_count
+                else "The indexed library support I found is limited. "
+            )
+            answer = (
+                prefix +
+                f"The strongest retrieved source, {rel_path}, says: {excerpt} [{label}]. "
+                "I do not see enough cited support in the current retrieved library context to give a complete answer."
+            )
 
         if (
             require_citations
@@ -1422,17 +1556,14 @@ Assistant:"""
         self._append_recent_turn("user", user)
         self._append_recent_turn("assistant", answer)
 
-        critique: Optional[str] = None
-        improvements: Optional[str] = None
-        new_state = self._load_self_state()
-        if self._reflection_enabled():
-            critique, improvements, new_state = self.reflector.reflect(user, answer, new_state)
-            if critique:
-                self.mem.add("CRITIQUE: " + critique, kind="meta")
-            if improvements:
-                self.playbook.update(improvements)
-                self._live_guidance = improvements
-            if new_state:
-                self._save_self_state(new_state)
+        # Async reflection — fires in background, never blocks the response
+        self.reflector.reflect_async(
+            user,
+            answer,
+            rulebook_text=self.playbook.format_for_teacher(),
+            on_add=self._on_reflection_add,
+            on_update=self._on_reflection_update,
+            on_flag=self._on_reflection_flag,
+        )
 
-        return answer, critique, improvements
+        return answer, None, None

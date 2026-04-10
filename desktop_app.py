@@ -7,6 +7,7 @@ import multiprocessing as mp
 import os
 import re
 import sys
+import threading
 import traceback
 from collections import deque
 
@@ -31,6 +32,7 @@ try:
         QPlainTextEdit,
         QProgressBar,
         QProgressDialog,
+        QScrollArea,
         QSpinBox,
         QTextBrowser,
         QVBoxLayout,
@@ -120,6 +122,124 @@ def _install_exception_logging() -> None:
     sys.excepthook = _log_unhandled
 
 
+class RulebookDialog(QDialog):
+    """Modal dialog for reviewing and editing the behavioral rulebook."""
+
+    def __init__(self, rules: list, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Rulebook")
+        self.setMinimumSize(660, 460)
+        self.resize(720, 540)
+        self._rules = rules
+        self._pending_deletes: set[int] = set()
+        self._pending_updates: dict[int, str] = {}
+        self._editors: dict[int, QPlainTextEdit] = {}
+        self._frames: dict[int, QFrame] = {}
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        header = QLabel(
+            "Review and edit the behavioral rulebook.\n"
+            "[user] rules are protected from automatic pruning.  "
+            "[teacher] rules are managed automatically."
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(8)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+
+        if not self._rules:
+            empty = QLabel("No rules yet. Use  rule: <text>  in chat to add a rule.")
+            empty.setWordWrap(True)
+            inner_layout.addWidget(empty)
+        else:
+            for rule in self._rules:
+                rule_id = int(rule.get("id", -1))
+                source = str(rule.get("source", "teacher"))
+                text = str(rule.get("text", ""))
+
+                frame = QFrame()
+                frame.setObjectName("settingsCard")
+                frame.setFrameShape(QFrame.StyledPanel)
+                self._frames[rule_id] = frame
+                row = QHBoxLayout(frame)
+                row.setContentsMargins(10, 8, 10, 8)
+                row.setSpacing(10)
+
+                tag = QLabel(f"[{source}]")
+                tag.setFixedWidth(62)
+                tag.setStyleSheet(
+                    "color: #a8ffcf; font-weight: bold;"
+                    if source == "user"
+                    else "color: #9fd3ff;"
+                )
+
+                editor = QPlainTextEdit(text)
+                editor.setMaximumHeight(62)
+                editor.setMinimumHeight(42)
+                self._editors[rule_id] = editor
+
+                del_btn = QPushButton("Delete")
+                del_btn.setFixedWidth(58)
+                del_btn.clicked.connect(
+                    lambda _checked, rid=rule_id: self._mark_delete(rid)
+                )
+
+                row.addWidget(tag)
+                row.addWidget(editor, 1)
+                row.addWidget(del_btn)
+                inner_layout.addWidget(frame)
+
+        inner_layout.addStretch(1)
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        save_btn = QPushButton("Save Changes")
+        close_btn = QPushButton("Close")
+        save_btn.setMinimumHeight(30)
+        close_btn.setMinimumHeight(30)
+        save_btn.clicked.connect(self._collect_and_accept)
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    def _mark_delete(self, rule_id: int) -> None:
+        self._pending_deletes.add(rule_id)
+        frame = self._frames.get(rule_id)
+        if frame:
+            frame.setEnabled(False)
+            frame.setStyleSheet("background: #3a1515; border-radius: 8px;")
+
+    def _collect_and_accept(self) -> None:
+        for rule_id, editor in self._editors.items():
+            if rule_id in self._pending_deletes:
+                continue
+            new_text = editor.toPlainText().strip()
+            orig = next((r["text"] for r in self._rules if r.get("id") == rule_id), "")
+            if new_text and new_text != orig:
+                self._pending_updates[rule_id] = new_text
+        self.accept()
+
+    def get_deletes(self) -> set[int]:
+        return self._pending_deletes
+
+    def get_updates(self) -> dict[int, str]:
+        return self._pending_updates
+
+
 class ServiceWorker(QObject):
     initialized = Signal(object)
     models_ready = Signal(list)
@@ -127,13 +247,20 @@ class ServiceWorker(QObject):
     rag_updated = Signal(object, str)
     memory_updated = Signal(object, str)
     reply_ready = Signal(str, str, str)
+    chat_finished = Signal(str)
+    response_stopped = Signal(str)
     failed = Signal(str)
     status = Signal(str)
     progress = Signal(int, str)
+    rulebook_flagged = Signal(str)
 
     def __init__(self, config_path: str):
         super().__init__()
         self.service = CelesteService(config_path)
+        self._chat_thread: threading.Thread | None = None
+        self._reload_thread: threading.Thread | None = None
+        self._deep_index_thread: threading.Thread | None = None
+        self._chat_cancel_requested = False
 
     @Slot()
     def initialize(self) -> None:
@@ -141,6 +268,7 @@ class ServiceWorker(QObject):
             logging.info("Worker initialize requested.")
             self.status.emit("Starting Celeste backend...")
             cfg = self.service.start(status_cb=self.status.emit)
+            self.service.set_reflection_flag_cb(lambda reason: self.rulebook_flagged.emit(reason))
             self.initialized.emit(cfg)
             self.status.emit("Celeste ready.")
         except Exception as exc:
@@ -158,32 +286,104 @@ class ServiceWorker(QObject):
 
     @Slot(str)
     def send_message(self, message: str) -> None:
+        if self._chat_thread is not None and self._chat_thread.is_alive():
+            self.failed.emit("A chat request is already in progress.")
+            return
+
+        logging.info("Worker chat requested (chars=%s).", len(message or ""))
+        self.status.emit("Generating reply...")
+        self._chat_cancel_requested = False
+
+        def _run_chat() -> None:
+            try:
+                logging.info("Worker calling service.chat() from Python thread.")
+                answer, critique, improvements = self.service.chat(message)
+                if self._chat_cancel_requested:
+                    logging.info("Worker chat result discarded because stop was requested.")
+                    self.response_stopped.emit("Response stopped.")
+                    return
+                logging.info(
+                    "Worker service.chat() returned (answer_chars=%s, critique_chars=%s, improvements_chars=%s).",
+                    len(answer or ""),
+                    len(critique or ""),
+                    len(improvements or ""),
+                )
+                self.reply_ready.emit(answer, critique or "", improvements or "")
+                logging.info("Worker emitted reply_ready.")
+                if answer.strip() and not self._chat_cancel_requested:
+                    self.status.emit("Speaking reply...")
+                    logging.info("Worker calling service.speak() from Python thread.")
+                    self.service.speak(answer)
+                    logging.info("Worker service.speak() returned.")
+                if self._chat_cancel_requested:
+                    logging.info("Worker speech interrupted because stop was requested.")
+                    self.response_stopped.emit("Response stopped.")
+                    return
+                self.status.emit("Ready.")
+                logging.info("Worker marked chat request ready.")
+                self.chat_finished.emit("Ready.")
+            except Exception as exc:
+                if self._chat_cancel_requested:
+                    logging.info("Worker chat interrupted by stop request.")
+                    self.response_stopped.emit("Response stopped.")
+                    return
+                logging.exception("Chat request failed")
+                self.failed.emit(str(exc))
+            finally:
+                self._chat_thread = None
+                self._chat_cancel_requested = False
+
+        self._chat_thread = threading.Thread(
+            target=_run_chat,
+            name="celeste-chat-worker",
+            daemon=True,
+        )
+        self._chat_thread.start()
+
+    @Slot()
+    def stop_response(self) -> None:
+        if self._chat_thread is None or not self._chat_thread.is_alive():
+            self.response_stopped.emit("No response is currently active.")
+            return
+        logging.info("Worker stop-response requested.")
+        self._chat_cancel_requested = True
+        self.status.emit("Stopping response...")
         try:
-            logging.info("Worker chat requested (chars=%s).", len(message or ""))
-            self.status.emit("Generating reply...")
-            answer, critique, improvements = self.service.chat(message)
-            self.reply_ready.emit(answer, critique or "", improvements or "")
-            if answer.strip():
-                self.status.emit("Speaking reply...")
-                self.service.speak(answer)
-            self.status.emit("Ready.")
-        except Exception as exc:
-            logging.exception("Chat request failed")
-            self.failed.emit(str(exc))
+            self.service.shutdown()
+        except Exception:
+            logging.exception("Stopping response failed")
 
     @Slot(object, bool)
     def reload_config(self, overrides: object, persist: bool) -> None:
-        try:
-            data = dict(overrides) if isinstance(overrides, dict) else {}
-            logging.info("Worker reload requested (persist=%s).", persist)
-            self.status.emit("Reloading Celeste with updated settings...")
-            cfg = self.service.reload(data, persist=persist, status_cb=self.status.emit)
-            self.reloaded.emit(cfg)
-            self.models_ready.emit(self.service.available_models())
-            self.status.emit("Reload complete.")
-        except Exception as exc:
-            logging.exception("Reload failed")
-            self.failed.emit(str(exc))
+        if self._reload_thread is not None and self._reload_thread.is_alive():
+            self.failed.emit("A reload is already in progress.")
+            return
+
+        data = dict(overrides) if isinstance(overrides, dict) else {}
+        logging.info("Worker reload requested (persist=%s).", persist)
+        self.status.emit("Reloading Celeste with updated settings...")
+
+        def _run_reload() -> None:
+            try:
+                logging.info("Worker calling service.reload() from Python thread.")
+                cfg = self.service.reload(data, persist=persist, status_cb=self.status.emit)
+                self.service.set_reflection_flag_cb(lambda reason: self.rulebook_flagged.emit(reason))
+                logging.info("Worker service.reload() returned.")
+                self.reloaded.emit(cfg)
+                self.models_ready.emit(self.service.available_models())
+                self.status.emit("Reload complete.")
+            except Exception as exc:
+                logging.exception("Reload failed")
+                self.failed.emit(str(exc))
+            finally:
+                self._reload_thread = None
+
+        self._reload_thread = threading.Thread(
+            target=_run_reload,
+            name="celeste-reload-worker",
+            daemon=True,
+        )
+        self._reload_thread.start()
 
     @Slot(str)
     def add_rag_directory(self, directory: str) -> None:
@@ -220,24 +420,39 @@ class ServiceWorker(QObject):
 
     @Slot()
     def build_deep_index(self) -> None:
-        try:
-            logging.info("Worker deep-index build requested.")
-            def on_progress(message: str, percent: int = 0) -> None:
-                self.status.emit(message)
-                self.progress.emit(int(percent), message)
+        if self._deep_index_thread is not None and self._deep_index_thread.is_alive():
+            self.failed.emit("A deep index build is already in progress.")
+            return
 
-            on_progress("Building deep library index...", 0)
-            cfg, stats = self.service.build_deep_rag_index(progress_cb=on_progress)
-            message = (
-                f"Deep index ready: {stats.get('files_indexed', 0)} files, "
-                f"{stats.get('chunks_indexed', 0)} chunks."
-            )
-            self.rag_updated.emit(cfg, message)
-            self.progress.emit(100, "Deep index ready.")
-            self.status.emit("Deep index ready.")
-        except Exception as exc:
-            logging.exception("Deep index build failed")
-            self.failed.emit(str(exc))
+        logging.info("Worker deep-index build requested.")
+
+        def on_progress(message: str, percent: int = 0) -> None:
+            self.status.emit(message)
+            self.progress.emit(int(percent), message)
+
+        def _run_deep_index() -> None:
+            try:
+                on_progress("Building deep library index...", 0)
+                cfg, stats = self.service.build_deep_rag_index(progress_cb=on_progress)
+                message = (
+                    f"Deep index ready: {stats.get('files_indexed', 0)} files, "
+                    f"{stats.get('chunks_indexed', 0)} chunks."
+                )
+                self.rag_updated.emit(cfg, message)
+                self.progress.emit(100, "Deep index ready.")
+                self.status.emit("Deep index ready.")
+            except Exception as exc:
+                logging.exception("Deep index build failed")
+                self.failed.emit(str(exc))
+            finally:
+                self._deep_index_thread = None
+
+        self._deep_index_thread = threading.Thread(
+            target=_run_deep_index,
+            name="celeste-deep-index-worker",
+            daemon=True,
+        )
+        self._deep_index_thread.start()
 
     @Slot(str)
     def remove_rag_directory(self, directory: str) -> None:
@@ -315,6 +530,7 @@ class CelesteWindow(QMainWindow):
     purge_engram_requested = Signal(object)
     set_engram_auto_prune_requested = Signal(bool)
     shutdown_requested = Signal()
+    stop_response_requested = Signal()
 
     def __init__(self, config_path: str):
         super().__init__()
@@ -380,6 +596,13 @@ class CelesteWindow(QMainWindow):
 
         self.reflection_toggle = QCheckBox("Enable reflection pass")
         form.addRow("Reflection", self.reflection_toggle)
+
+        self.reflection_model_combo = QComboBox()
+        self.reflection_model_combo.setEditable(True)
+        self.reflection_model_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.reflection_model_combo.setMinimumHeight(32)
+        self.reflection_model_combo.addItem("(use main model)", userData="")
+        form.addRow("Reflect Model", self.reflection_model_combo)
 
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(64, 8192)
@@ -461,17 +684,20 @@ class CelesteWindow(QMainWindow):
         button_grid.setVerticalSpacing(10)
         self.reload_button = QPushButton("Apply and Reload")
         self.refresh_models_button = QPushButton("Refresh Models")
+        self.rulebook_button = QPushButton("View Rulebook")
         self.live_log_button = QPushButton("Live Log")
         self.live_log_button.setCheckable(True)
         self.shutdown_button = QPushButton("Shutdown Celeste")
         for button in (
             self.reload_button,
             self.refresh_models_button,
+            self.rulebook_button,
         ):
             button.setMinimumHeight(30)
             button.setMinimumWidth(0)
         button_grid.addWidget(self.reload_button, 0, 0)
         button_grid.addWidget(self.refresh_models_button, 0, 1)
+        button_grid.addWidget(self.rulebook_button, 1, 0, 1, 2)
         button_grid.setColumnStretch(0, 1)
         button_grid.setColumnStretch(1, 1)
         settings_layout.addLayout(button_grid)
@@ -521,8 +747,10 @@ class CelesteWindow(QMainWindow):
         send_row.setSpacing(10)
         self.send_button = QPushButton("Send")
         self.clear_button = QPushButton("Clear Transcript")
+        self.stop_button = QPushButton("Stop Response")
         send_row.addWidget(self.send_button)
         send_row.addWidget(self.clear_button)
+        send_row.addWidget(self.stop_button)
         send_row.addStretch(1)
         self.live_log_button.setMinimumHeight(30)
         self.shutdown_button.setMinimumHeight(30)
@@ -570,6 +798,7 @@ class CelesteWindow(QMainWindow):
         self.shutdown_button.clicked.connect(self._shutdown_app)
         self.send_button.clicked.connect(self._send_message)
         self.clear_button.clicked.connect(self.chat_view.clear)
+        self.stop_button.clicked.connect(self._stop_response)
         self.add_directory_button.clicked.connect(self._choose_rag_directory)
         self.remove_directory_button.clicked.connect(self._remove_selected_rag_directory)
         self.reindex_button.clicked.connect(lambda: self.reindex_rag_requested.emit())
@@ -649,6 +878,7 @@ class CelesteWindow(QMainWindow):
         self.purge_engram_requested.connect(self.worker.purge_engram_memory)
         self.set_engram_auto_prune_requested.connect(self.worker.set_engram_auto_prune)
         self.shutdown_requested.connect(self.worker.shutdown)
+        self.stop_response_requested.connect(self.worker.stop_response)
 
         self.worker.initialized.connect(self._on_initialized)
         self.worker.models_ready.connect(self._on_models_ready)
@@ -656,9 +886,14 @@ class CelesteWindow(QMainWindow):
         self.worker.rag_updated.connect(self._on_rag_updated)
         self.worker.memory_updated.connect(self._on_memory_updated)
         self.worker.reply_ready.connect(self._on_reply_ready)
+        self.worker.chat_finished.connect(self._on_chat_finished)
+        self.worker.response_stopped.connect(self._on_response_stopped)
         self.worker.failed.connect(self._on_failed)
         self.worker.status.connect(self._set_status)
         self.worker.progress.connect(self._on_progress)
+        self.worker.rulebook_flagged.connect(self._on_rulebook_flagged)
+
+        self.rulebook_button.clicked.connect(self._open_rulebook)
 
         self.worker_thread.start()
 
@@ -698,11 +933,14 @@ class CelesteWindow(QMainWindow):
         self.engram_purge_combo.setEnabled(not busy)
         self.engram_purge_button.setEnabled(not busy)
         self.model_combo.setEnabled(not busy)
+        self.reflection_model_combo.setEnabled(not busy)
         self.tokens_spin.setEnabled(not busy)
         self.tts_toggle.setEnabled(not busy)
         self.memory_toggle.setEnabled(not busy)
         self.reflection_toggle.setEnabled(not busy)
+        self.rulebook_button.setEnabled(not busy)
         self.rag_dirs_list.setEnabled(not busy)
+        self.stop_button.setEnabled(bool(busy and self._busy_reason == "chat"))
         if status:
             self.status_label.setText(status)
         if not busy:
@@ -785,6 +1023,25 @@ class CelesteWindow(QMainWindow):
         elif self.cfg is not None:
             self._set_selected_model(self.cfg.model_path)
         self.model_combo.blockSignals(False)
+        # Populate reflection model combo with the same model list
+        current_reflect = self.reflection_model_combo.currentData() or ""
+        self.reflection_model_combo.blockSignals(True)
+        self.reflection_model_combo.clear()
+        self.reflection_model_combo.addItem("(use main model)", userData="")
+        for model in models:
+            path = str(model)
+            label = self._model_label(path, duplicate=name_counts.get(os.path.basename(path), 0) > 1)
+            self.reflection_model_combo.addItem(label, userData=path)
+        # Re-select previously chosen reflection model
+        if not current_reflect and self.cfg is not None:
+            current_reflect = str(
+                dict(self.cfg.reflection or {}).get("model_path", "") or ""
+            )
+        for i in range(self.reflection_model_combo.count()):
+            if self.reflection_model_combo.itemData(i) == current_reflect:
+                self.reflection_model_combo.setCurrentIndex(i)
+                break
+        self.reflection_model_combo.blockSignals(False)
 
     @Slot(object, str)
     def _on_rag_updated(self, cfg: object, message: str) -> None:
@@ -792,7 +1049,12 @@ class CelesteWindow(QMainWindow):
         if self.cfg is not None:
             self._populate_from_config(self.cfg)
         self._append_system(message)
-        status = "Deep index ready." if self._busy_reason == "deep_index" else "Library index updated."
+        if self._busy_reason == "deep_index":
+            status = "Deep index ready."
+        elif self._busy_reason == "rag_dir_change":
+            status = "File RAG: New directory loaded \u2014 rebuild deep index"
+        else:
+            status = "Library index updated."
         self._set_busy(False, status)
 
     @Slot(object, str)
@@ -810,13 +1072,37 @@ class CelesteWindow(QMainWindow):
             self._append_chat("Critique", critique, "#ffd6a5")
         if improvements.strip():
             self._append_chat("Playbook", improvements, "#9fd3ff")
-        self._set_busy(False, "Ready.")
+
+    @Slot(str)
+    def _on_chat_finished(self, message: str) -> None:
+        self._set_busy(False, message or "Ready.")
+
+    @Slot(str)
+    def _on_response_stopped(self, message: str) -> None:
+        self._append_system(message or "Response stopped.")
+        self._set_busy(False, message or "Response stopped.")
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
         self._append_system(f"Error: {message}")
         self._set_busy(False, "Error.")
         QMessageBox.critical(self, "Celeste Error", message)
+
+    @Slot(str)
+    def _on_rulebook_flagged(self, reason: str) -> None:
+        self._append_system(
+            f"Rulebook: {reason} — click \u2018View Rulebook\u2019 to review."
+        )
+        self._set_status("Rulebook review recommended.")
+
+    def _open_rulebook(self) -> None:
+        rules = self.worker.service.get_rulebook()
+        dialog = RulebookDialog(rules, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            for rule_id in dialog.get_deletes():
+                self.worker.service.delete_rulebook_rule(rule_id)
+            for rule_id, text in dialog.get_updates().items():
+                self.worker.service.update_rulebook_rule(rule_id, text)
 
     def _populate_from_config(self, cfg: AgentConfig) -> None:
         self._set_selected_model(cfg.model_path)
@@ -911,8 +1197,16 @@ class CelesteWindow(QMainWindow):
             return
         self.input_box.clear()
         self._append_chat("You", message, "#9fd3ff")
+        self._busy_reason = "chat"
         self._set_busy(True, "Generating reply...")
         self.send_requested.emit(message)
+
+    def _stop_response(self) -> None:
+        if self._busy_reason != "chat":
+            return
+        self.stop_button.setEnabled(False)
+        self.status_label.setText("Stopping response...")
+        self.stop_response_requested.emit()
 
     def _choose_rag_directory(self) -> None:
         if self.busy:
@@ -920,6 +1214,7 @@ class CelesteWindow(QMainWindow):
         directory = QFileDialog.getExistingDirectory(self, "Choose Directory for Celeste File Access")
         if not directory:
             return
+        self._busy_reason = "rag_dir_change"
         self._set_busy(True, f"Indexing {directory}...")
         self.add_rag_directory_requested.emit(directory)
 
@@ -933,6 +1228,7 @@ class CelesteWindow(QMainWindow):
         directory = item.text().strip()
         if not directory:
             return
+        self._busy_reason = "rag_dir_change"
         self._set_busy(True, f"Removing {directory}...")
         self.remove_rag_directory_requested.emit(directory)
 
@@ -941,6 +1237,8 @@ class CelesteWindow(QMainWindow):
             return
         reflection = dict((self.cfg.reflection if self.cfg is not None else {}) or {})
         reflection["enabled"] = self.reflection_toggle.isChecked()
+        reflection_model_path = self.reflection_model_combo.currentData() or ""
+        reflection["model_path"] = str(reflection_model_path)
         memory_cfg = dict((self.cfg.memory if self.cfg is not None else {}) or {})
         memory_cfg["engram_auto_prune"] = self.engram_auto_toggle.isChecked()
         overrides = {
