@@ -1282,6 +1282,39 @@ class CelesteWindow(QMainWindow):
             return data
         return self.model_combo.currentText().strip()
 
+    @staticmethod
+    def _markdown_to_html(text: str) -> str:
+        """Convert a subset of markdown to HTML for chat display."""
+        # Escape HTML first, then convert markdown patterns back to tags
+        escaped = html.escape(text)
+        # Headers (## Header → bold line)
+        escaped = re.sub(r"^######\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        escaped = re.sub(r"^#####\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        escaped = re.sub(r"^####\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        escaped = re.sub(r"^###\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        escaped = re.sub(r"^##\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        escaped = re.sub(r"^#\s+(.+)$", r"<b>\1</b>", escaped, flags=re.MULTILINE)
+        # Bold+italic ***text*** or ___text___
+        escaped = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", escaped)
+        escaped = re.sub(r"___(.+?)___", r"<b><i>\1</i></b>", escaped)
+        # Bold **text** or __text__
+        escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+        escaped = re.sub(r"__(.+?)__", r"<b>\1</b>", escaped)
+        # Italic *text* or _text_
+        escaped = re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
+        escaped = re.sub(r"_(.+?)_", r"<i>\1</i>", escaped)
+        # Inline code `text`
+        escaped = re.sub(
+            r"`(.+?)`",
+            r"<code style='background:#1a2530;padding:1px 4px;border-radius:3px;'>\1</code>",
+            escaped,
+        )
+        # Bullet lists (- item or * item)
+        escaped = re.sub(r"^[-*]\s+(.+)$", r"&nbsp;&nbsp;• \1", escaped, flags=re.MULTILINE)
+        # Newlines to <br>
+        escaped = escaped.replace("\n", "<br>")
+        return escaped
+
     def _append_system(self, text: str) -> None:
         self.chat_view.append(
             f"<div style='margin: 6px 0; color: #8da2b5;'><i>{html.escape(text)}</i></div>"
@@ -1308,7 +1341,7 @@ class CelesteWindow(QMainWindow):
         source_lines: list[str] = []
         if split_sources:
             body_text, source_lines = self._split_sources_block(text)
-        safe_text = html.escape(body_text).replace("\n", "<br>")
+        safe_text = self._markdown_to_html(body_text)
         safe_speaker = html.escape(speaker)
         sources_html = ""
         if source_lines:

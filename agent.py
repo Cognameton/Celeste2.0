@@ -1292,7 +1292,7 @@ class Agent:
                     "Only reference documents that appear in the Grounding Sources section above. Do not invent document titles, archive names, or journal names.",
                     "When describing what a source says, paraphrase its actual content — do not fabricate descriptions.",
                     "General background statements that do not come from the grounding sources do not need citations.",
-                    "Do not use Markdown formatting. No bold, no asterisks, no bullet hyphens, no headers. Plain prose only.",
+                    "Use Markdown formatting where appropriate: bold for key terms, bullet lists for enumerations.",
                 ]
             )
         citation_tail_budget = 0
@@ -1485,7 +1485,7 @@ Assistant:"""
                 "Do not invent document names, archive names, or journal titles. Only name sources that appear verbatim in the Grounding Sources section. "
                 "Do not interpret 'library' as a public institution. "
                 "If the retrieved sources only support part of the request, give that limited answer with citations and say the indexed support is limited. "
-                "Do not use Markdown formatting. Plain prose only. "
+                "Use Markdown formatting where appropriate. "
                 "Do not answer generically without citations."
             )
             retry_prompt, retry_max_new = prep_prompt(notes_block, extra_instruction=extra_instruction, prior_attempt=answer)
