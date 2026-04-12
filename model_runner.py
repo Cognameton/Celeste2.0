@@ -826,6 +826,28 @@ class LLMRunner:
             yield from self._server_stream_request("/completion", payload)
             return
 
+        if self.backend == "llama_cpp" and self.llm is not None:
+            try:
+                params = set(inspect.signature(self.llm.__call__).parameters.keys())
+                kwargs: Dict[str, Any] = dict(
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stop=stop,
+                    repeat_penalty=repeat_penalty,
+                    stream=True,
+                )
+                if "repeat_last_n" in params:
+                    kwargs["repeat_last_n"] = repeat_last_n
+                filtered = {k: v for k, v in kwargs.items() if k in params}
+                for chunk in self.llm(prompt, **filtered):
+                    token = chunk["choices"][0].get("text", "")
+                    if token:
+                        yield token
+                return
+            except Exception:
+                pass  # fall through to non-streaming generate below
+
         yield self.generate(
             prompt,
             max_new_tokens=max_new_tokens,

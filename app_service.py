@@ -43,11 +43,11 @@ class CelesteService:
             self.agent.reflection_flag_cb = self._reflection_flag_cb
         return self.cfg
 
-    def chat(self, message: str) -> tuple[str, str | None, str | None]:
+    def chat(self, message: str, token_cb: Callable[[str], None] | None = None) -> tuple[str, str | None, str | None]:
         if self.agent is None:
             self.start()
         assert self.agent is not None
-        return self.agent.respond(message)
+        return self.agent.respond(message, token_cb=token_cb)
 
     def speak(self, text: str) -> None:
         if self.agent is None:
@@ -162,6 +162,24 @@ class CelesteService:
         assert self.agent is not None
         stats = self.agent.purge_engram_memory(seconds=seconds)
         return self.cfg, stats
+
+    def get_token_usage(self) -> tuple[int, int]:
+        """Returns (last_prompt_tokens, n_ctx)."""
+        if self.agent is None:
+            return 0, int(getattr(self.cfg, "n_ctx", 0))
+        return self.agent._last_prompt_tokens, int(self.cfg.n_ctx)
+
+    def rag_directory_counts(self) -> dict[str, int]:
+        if self.agent is None:
+            return {}
+        return self.agent.file_rag.files_per_directory()
+
+    def set_persona(self, preamble: str) -> AgentConfig:
+        self.cfg.system_preamble = preamble.strip()
+        if self.agent is not None:
+            self.agent.cfg.system_preamble = self.cfg.system_preamble
+        save_config(self.config_path, self.cfg)
+        return self.cfg
 
     def set_engram_auto_prune(self, enabled: bool) -> tuple[AgentConfig, dict[str, Any]]:
         if self.agent is None:

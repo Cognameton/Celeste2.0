@@ -89,6 +89,7 @@ class Agent:
         )
         self.reflection_flag_cb: Callable[[str], None] | None = None
         self.tts = TTSManager(cfg)
+        self._last_prompt_tokens: int = 0
 
         # Self-state (identity/focus/etc.)
         self.self_state_path = os.path.join(self.cfg.data_dir, "self_state.json")
@@ -720,12 +721,12 @@ class Agent:
             return score >= (0.08 if broad_summary else 0.04)
         if broad_summary:
             return (
-                semantic_score >= 0.30
-                or (semantic_score >= 0.27 and lexical_score >= 0.11)
+                semantic_score >= 0.22
+                or (semantic_score >= 0.20 and lexical_score >= 0.08)
                 or (
                     FILE_RAG_INDEX_KIND_SEMANTIC in retrieval_sources
                     and FILE_RAG_INDEX_KIND_TFIDF in retrieval_sources
-                    and max(score, semantic_score, lexical_score) >= 0.24
+                    and max(score, semantic_score, lexical_score) >= 0.18
                 )
             )
         return (
@@ -803,11 +804,14 @@ class Agent:
             return False
         if broad_summary:
             query_terms = self._grounding_query_terms(user_msg)
-            return (
-                len(sources) >= 2
-                and self._grounding_doc_count(sources) >= 2
-                and self._has_corroborated_grounding(sources, query_terms=query_terms)
-            )
+            doc_count = self._grounding_doc_count(sources)
+            # Multi-document: standard corroboration check
+            if len(sources) >= 2 and doc_count >= 2:
+                return self._has_corroborated_grounding(sources, query_terms=query_terms)
+            # Single-document library: 3+ strong chunks from one source is sufficient
+            if len(sources) >= 3 and doc_count >= 1:
+                return True
+            return False
         return True
 
     def _format_grounding_notes(
@@ -923,6 +927,17 @@ class Agent:
             "how many files can you see",
             "how many documents do you see",
             "how many files do you see",
+            "how many documents are in",
+            "how many files are in",
+            "how many documents do you have",
+            "how many files do you have",
+            "how many indexed documents",
+            "how many indexed files",
+            "how many documents have you",
+            "how many documents in your",
+            "how many files in your",
+            "documents in the index",
+            "files in the index",
         )
         if any(phrase in u_low for phrase in count_phrases):
             total_docs = self.file_rag.document_count()
@@ -1006,7 +1021,7 @@ class Agent:
         return None
 
     # ---------- Main interaction ----------
-    def respond(self, user: str) -> Tuple[str, Optional[str], Optional[str]]:
+    def respond(self, user: str, token_cb: Callable[[str], None] | None = None) -> Tuple[str, Optional[str], Optional[str]]:
         u_strip = user.strip()
         u_low = u_strip.lower()
         library_requested = self._is_library_requested(u_strip)
@@ -1087,7 +1102,10 @@ class Agent:
         mem_texts = [m["text"] for m in raw_mems]
         pattern_mem_texts = [m["text"] for m in raw_pattern_mems]
         graph_mem_texts = [m["text"] for m in raw_graph_mems]
-        rag_top_k = max(1, min(getattr(self.cfg, "file_rag_top_k", 4), 6 if library_requested else 4))
+        requested_reference_count = self._requested_reference_count(u_strip)
+        _base_top_k = getattr(self.cfg, "file_rag_top_k", 4)
+        _ref_boost = max(0, (requested_reference_count or 0))
+        rag_top_k = max(1, min(_base_top_k, max(6 if library_requested else 4, _ref_boost + 3)))
         file_context = (
             self.file_rag.get_context(
                 user,
@@ -1231,7 +1249,6 @@ class Agent:
             or bool(opened_file)
             or bool(library_hits)
         )
-        requested_reference_count = self._requested_reference_count(u_strip)
         base_instruction_lines = [
             "Answer the user's message succinctly. Output ONLY the answer text. No quotes, no headings, no code fences.",
             "Reply in the same language as the user's message. If the user wrote in English, reply in English.",
@@ -1272,8 +1289,10 @@ class Agent:
                     "Blend the retrieved grounding sources with your general knowledge when useful.",
                     "When you use a grounding source, cite it inline with its exact label like [1] or [2].",
                     "Do not invent citations or cite labels that were not provided.",
+                    "Only reference documents that appear in the Grounding Sources section above. Do not invent document titles, archive names, or journal names.",
+                    "When describing what a source says, paraphrase its actual content — do not fabricate descriptions.",
                     "General background statements that do not come from the grounding sources do not need citations.",
-                    "Do not use Markdown bold or asterisks in cited library answers.",
+                    "Do not use Markdown formatting. No bold, no asterisks, no bullet hyphens, no headers. Plain prose only.",
                 ]
             )
         citation_tail_budget = 0
@@ -1356,6 +1375,7 @@ Assistant:"""
 
         # Build prompt and ensure it fits the window
         prompt, max_new = prep_prompt(notes_block)
+        self._last_prompt_tokens = self._count_tokens(prompt)
         model_name = os.path.basename(str(getattr(self.cfg, "model_path", "") or "")).lower()
         disable_server_chat_template = "neko-chat" in model_name
         use_chat_api = (
@@ -1373,27 +1393,55 @@ Assistant:"""
         ]
 
         messages = make_messages(notes_block)
-        answer = (
-            self.llm.chat(
-                messages,
-                max_new_tokens=max_new,
-                temperature=0.3,
-                top_p=0.9,
-                stop=stop,
-                repeat_penalty=1.12,
-                repeat_last_n=256,
-            ).strip()
-            if use_chat_api
-            else self.llm.generate(
-                prompt,
-                max_new_tokens=max_new,
-                temperature=0.3,
-                top_p=0.9,
-                stop=stop,
-                repeat_penalty=1.12,   # may be ignored if unsupported; model_runner filters accordingly
-                repeat_last_n=256,
-            ).strip()
-        )
+        if token_cb is not None:
+            _tokens: list[str] = []
+            _stream = (
+                self.llm.chat_stream(
+                    messages,
+                    max_new_tokens=max_new,
+                    temperature=0.3,
+                    top_p=0.9,
+                    stop=stop,
+                    repeat_penalty=1.12,
+                    repeat_last_n=256,
+                )
+                if use_chat_api
+                else self.llm.generate_stream(
+                    prompt,
+                    max_new_tokens=max_new,
+                    temperature=0.3,
+                    top_p=0.9,
+                    stop=stop,
+                    repeat_penalty=1.12,
+                    repeat_last_n=256,
+                )
+            )
+            for _tok in _stream:
+                token_cb(_tok)
+                _tokens.append(_tok)
+            answer = "".join(_tokens).strip()
+        else:
+            answer = (
+                self.llm.chat(
+                    messages,
+                    max_new_tokens=max_new,
+                    temperature=0.3,
+                    top_p=0.9,
+                    stop=stop,
+                    repeat_penalty=1.12,
+                    repeat_last_n=256,
+                ).strip()
+                if use_chat_api
+                else self.llm.generate(
+                    prompt,
+                    max_new_tokens=max_new,
+                    temperature=0.3,
+                    top_p=0.9,
+                    stop=stop,
+                    repeat_penalty=1.12,
+                    repeat_last_n=256,
+                ).strip()
+            )
 
         # Perspective correction (conversational voice)
         answer = self._enforce_perspective(user, answer)
@@ -1432,10 +1480,12 @@ Assistant:"""
 
         if require_citations and not self._citation_labels(answer, max_label=len(grounding_sources)):
             extra_instruction = (
-                "Revise the answer using the indexed local library sources that were provided. "
-                "If a retrieved source supports a useful claim, cite that claim inline with its exact label, for example [1] or [2]. "
+                "Revise the answer using only the indexed local library sources that were provided in the Grounding Sources section. "
+                "Cite each source inline with its exact label, for example [1] or [2]. "
+                "Do not invent document names, archive names, or journal titles. Only name sources that appear verbatim in the Grounding Sources section. "
                 "Do not interpret 'library' as a public institution. "
-                "If the retrieved sources only support part of the user's request, give that limited supported answer with citations and say the indexed support is limited. "
+                "If the retrieved sources only support part of the request, give that limited answer with citations and say the indexed support is limited. "
+                "Do not use Markdown formatting. Plain prose only. "
                 "Do not answer generically without citations."
             )
             retry_prompt, retry_max_new = prep_prompt(notes_block, extra_instruction=extra_instruction, prior_attempt=answer)

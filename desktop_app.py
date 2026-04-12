@@ -13,7 +13,7 @@ from collections import deque
 
 try:
     from PySide6.QtCore import QObject, QMetaObject, QThread, QTimer, Qt, Signal, Slot
-    from PySide6.QtGui import QFont, QIcon
+    from PySide6.QtGui import QFont, QIcon, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -240,6 +240,52 @@ class RulebookDialog(QDialog):
         return self._pending_updates
 
 
+class PersonaDialog(QDialog):
+    """Modal dialog for editing the system preamble / persona."""
+
+    def __init__(self, current_preamble: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Persona")
+        self.resize(520, 300)
+        self._preamble = current_preamble
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        hint = QLabel(
+            "Define the assistant's identity, name, and behavioral baseline. "
+            "This text is prepended to every prompt — changes take effect immediately."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._editor = QPlainTextEdit(current_preamble)
+        self._editor.setPlaceholderText(
+            "e.g. Your name is Aria. You are a personal research assistant for Shane. "
+            "Never claim to be the user or adopt the user's name or identity."
+        )
+        layout.addWidget(self._editor, 1)
+
+        buttons = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.setDefault(True)
+        cancel_btn = QPushButton("Cancel")
+        buttons.addStretch()
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(save_btn)
+        layout.addLayout(buttons)
+
+        save_btn.clicked.connect(self._save)
+        cancel_btn.clicked.connect(self.reject)
+
+    def _save(self) -> None:
+        self._preamble = self._editor.toPlainText().strip()
+        self.accept()
+
+    def get_preamble(self) -> str:
+        return self._preamble
+
+
 class ServiceWorker(QObject):
     initialized = Signal(object)
     models_ready = Signal(list)
@@ -249,6 +295,8 @@ class ServiceWorker(QObject):
     reply_ready = Signal(str, str, str)
     chat_finished = Signal(str)
     response_stopped = Signal(str)
+    token_received = Signal(str)
+    token_usage = Signal(int, int)
     failed = Signal(str)
     status = Signal(str)
     progress = Signal(int, str)
@@ -297,7 +345,10 @@ class ServiceWorker(QObject):
         def _run_chat() -> None:
             try:
                 logging.info("Worker calling service.chat() from Python thread.")
-                answer, critique, improvements = self.service.chat(message)
+                answer, critique, improvements = self.service.chat(
+                    message,
+                    token_cb=lambda tok: self.token_received.emit(tok),
+                )
                 if self._chat_cancel_requested:
                     logging.info("Worker chat result discarded because stop was requested.")
                     self.response_stopped.emit("Response stopped.")
@@ -309,6 +360,8 @@ class ServiceWorker(QObject):
                     len(improvements or ""),
                 )
                 self.reply_ready.emit(answer, critique or "", improvements or "")
+                used, ctx = self.service.get_token_usage()
+                self.token_usage.emit(used, ctx)
                 logging.info("Worker emitted reply_ready.")
                 if answer.strip() and not self._chat_cancel_requested:
                     self.status.emit("Speaking reply...")
@@ -580,7 +633,7 @@ class CelesteWindow(QMainWindow):
         form.setFormAlignment(Qt.AlignTop)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(8)
+        form.setVerticalSpacing(14)
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -610,7 +663,36 @@ class CelesteWindow(QMainWindow):
         self.tokens_spin.setMinimumHeight(32)
         form.addRow("Max Tokens", self.tokens_spin)
 
+        settings_layout.addSpacing(6)
         settings_layout.addLayout(form)
+        settings_layout.addSpacing(10)
+
+        button_grid = QGridLayout()
+        button_grid.setHorizontalSpacing(10)
+        button_grid.setVerticalSpacing(10)
+        self.reload_button = QPushButton("Apply and Reload")
+        self.refresh_models_button = QPushButton("Refresh Models")
+        self.rulebook_button = QPushButton("View Rulebook")
+        self.persona_button = QPushButton("Edit Persona")
+        self.live_log_button = QPushButton("Live Log")
+        self.live_log_button.setCheckable(True)
+        self.shutdown_button = QPushButton("Shutdown Celeste")
+        for button in (
+            self.reload_button,
+            self.refresh_models_button,
+            self.rulebook_button,
+            self.persona_button,
+        ):
+            button.setMinimumHeight(30)
+            button.setMinimumWidth(0)
+        button_grid.addWidget(self.reload_button, 0, 0)
+        button_grid.addWidget(self.refresh_models_button, 0, 1)
+        button_grid.addWidget(self.rulebook_button, 1, 0)
+        button_grid.addWidget(self.persona_button, 1, 1)
+        button_grid.setColumnStretch(0, 1)
+        button_grid.setColumnStretch(1, 1)
+        settings_layout.addLayout(button_grid)
+        settings_layout.addSpacing(10)
 
         engram_title = QLabel("Engram Memory")
         engram_title.setObjectName("panelTitle")
@@ -679,29 +761,6 @@ class CelesteWindow(QMainWindow):
         rag_buttons.setColumnStretch(1, 1)
         settings_layout.addLayout(rag_buttons)
 
-        button_grid = QGridLayout()
-        button_grid.setHorizontalSpacing(10)
-        button_grid.setVerticalSpacing(10)
-        self.reload_button = QPushButton("Apply and Reload")
-        self.refresh_models_button = QPushButton("Refresh Models")
-        self.rulebook_button = QPushButton("View Rulebook")
-        self.live_log_button = QPushButton("Live Log")
-        self.live_log_button.setCheckable(True)
-        self.shutdown_button = QPushButton("Shutdown Celeste")
-        for button in (
-            self.reload_button,
-            self.refresh_models_button,
-            self.rulebook_button,
-        ):
-            button.setMinimumHeight(30)
-            button.setMinimumWidth(0)
-        button_grid.addWidget(self.reload_button, 0, 0)
-        button_grid.addWidget(self.refresh_models_button, 0, 1)
-        button_grid.addWidget(self.rulebook_button, 1, 0, 1, 2)
-        button_grid.setColumnStretch(0, 1)
-        button_grid.setColumnStretch(1, 1)
-        settings_layout.addLayout(button_grid)
-
         self.status_label = QLabel("Starting...")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
@@ -738,6 +797,28 @@ class CelesteWindow(QMainWindow):
         self.chat_view.setReadOnly(True)
         chat_layout.addWidget(self.chat_view, 1)
 
+        # Streaming preview — visible only while a reply is being generated
+        self.stream_frame = QFrame()
+        self.stream_frame.setObjectName("streamFrame")
+        self.stream_frame.setStyleSheet(
+            "#streamFrame { background: #0c1116; border: 1px solid #25313d; border-radius: 10px; padding: 6px; }"
+        )
+        stream_frame_layout = QVBoxLayout(self.stream_frame)
+        stream_frame_layout.setContentsMargins(8, 6, 8, 6)
+        stream_frame_layout.setSpacing(4)
+        self._stream_speaker_label = QLabel("Celeste")
+        self._stream_speaker_label.setStyleSheet("font-weight: 700; color: #a8ffcf;")
+        stream_frame_layout.addWidget(self._stream_speaker_label)
+        self.stream_preview = QPlainTextEdit()
+        self.stream_preview.setReadOnly(True)
+        self.stream_preview.setMaximumHeight(200)
+        self.stream_preview.setStyleSheet(
+            "QPlainTextEdit { background: transparent; border: none; color: #d6e8f7; }"
+        )
+        stream_frame_layout.addWidget(self.stream_preview)
+        self.stream_frame.hide()
+        chat_layout.addWidget(self.stream_frame)
+
         self.input_box = QPlainTextEdit()
         self.input_box.setPlaceholderText("Type a prompt for Celeste...")
         self.input_box.setFixedHeight(120)
@@ -758,6 +839,23 @@ class CelesteWindow(QMainWindow):
         send_row.addWidget(self.shutdown_button)
         chat_layout.addLayout(send_row)
 
+        token_row = QHBoxLayout()
+        token_row.setSpacing(8)
+        self.token_label = QLabel("Context: — / —")
+        self.token_label.setObjectName("panelSubtitle")
+        self.token_bar = QProgressBar()
+        self.token_bar.setRange(0, 100)
+        self.token_bar.setValue(0)
+        self.token_bar.setTextVisible(False)
+        self.token_bar.setFixedHeight(6)
+        self.token_bar.setStyleSheet(
+            "QProgressBar { background: #1a2530; border-radius: 3px; }"
+            "QProgressBar::chunk { background: #3a8f5a; border-radius: 3px; }"
+        )
+        token_row.addWidget(self.token_label)
+        token_row.addWidget(self.token_bar, 1)
+        chat_layout.addLayout(token_row)
+
         layout.addWidget(settings_card, 0)
         layout.addWidget(chat_card, 1)
         layout.setStretch(0, 0)
@@ -775,6 +873,7 @@ class CelesteWindow(QMainWindow):
         mono = QFont("DejaVu Sans Mono", 10)
         self.chat_view.setFont(mono)
         self.input_box.setFont(mono)
+        self.stream_preview.setFont(mono)
 
         self.log_dialog = LiveLogDialog(self)
         self.log_dialog.setWindowTitle("Celeste Live Log")
@@ -885,6 +984,8 @@ class CelesteWindow(QMainWindow):
         self.worker.reloaded.connect(self._on_reloaded)
         self.worker.rag_updated.connect(self._on_rag_updated)
         self.worker.memory_updated.connect(self._on_memory_updated)
+        self.worker.token_received.connect(self._on_token_received)
+        self.worker.token_usage.connect(self._on_token_usage)
         self.worker.reply_ready.connect(self._on_reply_ready)
         self.worker.chat_finished.connect(self._on_chat_finished)
         self.worker.response_stopped.connect(self._on_response_stopped)
@@ -894,6 +995,7 @@ class CelesteWindow(QMainWindow):
         self.worker.rulebook_flagged.connect(self._on_rulebook_flagged)
 
         self.rulebook_button.clicked.connect(self._open_rulebook)
+        self.persona_button.clicked.connect(self._open_persona)
 
         self.worker_thread.start()
 
@@ -939,6 +1041,7 @@ class CelesteWindow(QMainWindow):
         self.memory_toggle.setEnabled(not busy)
         self.reflection_toggle.setEnabled(not busy)
         self.rulebook_button.setEnabled(not busy)
+        self.persona_button.setEnabled(not busy)
         self.rag_dirs_list.setEnabled(not busy)
         self.stop_button.setEnabled(bool(busy and self._busy_reason == "chat"))
         if status:
@@ -1065,8 +1168,34 @@ class CelesteWindow(QMainWindow):
         self._append_system(message)
         self._set_busy(False, "Engram memory updated.")
 
+    @Slot(str)
+    def _on_token_received(self, token: str) -> None:
+        if not self.stream_frame.isVisible():
+            self.stream_preview.setPlainText("")
+            self.stream_frame.show()
+        self.stream_preview.moveCursor(QTextCursor.End)
+        self.stream_preview.insertPlainText(token)
+        self.stream_preview.ensureCursorVisible()
+
+    @Slot(int, int)
+    def _on_token_usage(self, used: int, ctx: int) -> None:
+        if ctx > 0:
+            pct = min(100, int(used * 100 / ctx))
+            self.token_label.setText(f"Context: {used:,} / {ctx:,} tokens")
+            self.token_bar.setValue(pct)
+            color = "#3a8f5a" if pct < 70 else "#c8842a" if pct < 90 else "#c83a3a"
+            self.token_bar.setStyleSheet(
+                "QProgressBar { background: #1a2530; border-radius: 3px; }"
+                f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
+            )
+
+    def _hide_stream_preview(self) -> None:
+        self.stream_frame.hide()
+        self.stream_preview.setPlainText("")
+
     @Slot(str, str, str)
     def _on_reply_ready(self, answer: str, critique: str, improvements: str) -> None:
+        self._hide_stream_preview()
         self._append_chat("Celeste", answer, "#a8ffcf", split_sources=True)
         if critique.strip():
             self._append_chat("Critique", critique, "#ffd6a5")
@@ -1079,11 +1208,13 @@ class CelesteWindow(QMainWindow):
 
     @Slot(str)
     def _on_response_stopped(self, message: str) -> None:
+        self._hide_stream_preview()
         self._append_system(message or "Response stopped.")
         self._set_busy(False, message or "Response stopped.")
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
+        self._hide_stream_preview()
         self._append_system(f"Error: {message}")
         self._set_busy(False, "Error.")
         QMessageBox.critical(self, "Celeste Error", message)
@@ -1104,6 +1235,13 @@ class CelesteWindow(QMainWindow):
             for rule_id, text in dialog.get_updates().items():
                 self.worker.service.update_rulebook_rule(rule_id, text)
 
+    def _open_persona(self) -> None:
+        current = str(getattr(self.worker.service.cfg, "system_preamble", "") or "")
+        dialog = PersonaDialog(current, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            self.worker.service.set_persona(dialog.get_preamble())
+            self._append_system("Persona updated.")
+
     def _populate_from_config(self, cfg: AgentConfig) -> None:
         self._set_selected_model(cfg.model_path)
         self.tts_toggle.setChecked(bool(cfg.tts_enabled))
@@ -1116,8 +1254,11 @@ class CelesteWindow(QMainWindow):
         self.engram_auto_toggle.setChecked(bool(memory_cfg.get("engram_auto_prune", True)))
         self.engram_auto_toggle.blockSignals(False)
         self.rag_dirs_list.clear()
+        counts = self.worker.service.rag_directory_counts()
         for path in cfg.file_rag_dirs:
-            self.rag_dirs_list.addItem(path)
+            count = counts.get(path)
+            label = f"{path} ({count} files)" if count is not None else path
+            self.rag_dirs_list.addItem(label)
 
     def _model_label(self, path: str, *, duplicate: bool = False) -> str:
         base = os.path.basename(path)

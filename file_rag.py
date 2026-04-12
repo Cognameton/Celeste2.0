@@ -721,6 +721,16 @@ class FileRAG:
     def document_count(self) -> int:
         return len(self.files)
 
+    def files_per_directory(self) -> dict[str, int]:
+        counts: dict[str, int] = {d: 0 for d in self.directories}
+        for item in self.files:
+            path = str(item.get("path", ""))
+            for d in self.directories:
+                if path.startswith(d):
+                    counts[d] = counts.get(d, 0) + 1
+                    break
+        return counts
+
     def list_documents(self, limit: Optional[int] = None) -> list[str]:
         names = sorted((item["rel_path"] for item in self.files), key=str.casefold)
         if limit is None:
