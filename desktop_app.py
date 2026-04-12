@@ -725,6 +725,10 @@ class CelesteWindow(QMainWindow):
         )
         settings_layout.addWidget(self.engram_auto_toggle)
 
+        self.engram_count_label = QLabel("Stored memories: —")
+        self.engram_count_label.setObjectName("panelSubtitle")
+        settings_layout.addWidget(self.engram_count_label)
+
         engram_row = QHBoxLayout()
         engram_row.setSpacing(10)
         self.engram_purge_combo = QComboBox()
@@ -748,6 +752,10 @@ class CelesteWindow(QMainWindow):
         rag_subtitle.setWordWrap(True)
         rag_subtitle.setObjectName("panelSubtitle")
         settings_layout.addWidget(rag_subtitle)
+
+        self.deep_index_status_label = QLabel("Deep index: unknown")
+        self.deep_index_status_label.setObjectName("panelSubtitle")
+        settings_layout.addWidget(self.deep_index_status_label)
 
         self.rag_dirs_list = QListWidget()
         self.rag_dirs_list.setMinimumHeight(150)
@@ -843,9 +851,11 @@ class CelesteWindow(QMainWindow):
         send_row.setSpacing(10)
         self.send_button = QPushButton("Send")
         self.clear_button = QPushButton("Clear Transcript")
+        self.export_button = QPushButton("Export Chat")
         self.stop_button = QPushButton("Stop Response")
         send_row.addWidget(self.send_button)
         send_row.addWidget(self.clear_button)
+        send_row.addWidget(self.export_button)
         send_row.addWidget(self.stop_button)
         send_row.addStretch(1)
         self.live_log_button.setMinimumHeight(30)
@@ -912,6 +922,7 @@ class CelesteWindow(QMainWindow):
         self.shutdown_button.clicked.connect(self._shutdown_app)
         self.send_button.clicked.connect(self._send_message)
         self.clear_button.clicked.connect(self.chat_view.clear)
+        self.export_button.clicked.connect(self._export_chat)
         self.stop_button.clicked.connect(self._stop_response)
         self.add_directory_button.clicked.connect(self._choose_rag_directory)
         self.remove_directory_button.clicked.connect(self._remove_selected_rag_directory)
@@ -1039,6 +1050,7 @@ class CelesteWindow(QMainWindow):
     def _set_busy(self, busy: bool, status: str | None = None) -> None:
         self.busy = busy
         self.send_button.setEnabled(not busy)
+        self.export_button.setEnabled(not busy)
         self.input_box.setEnabled(not busy)
         self.reload_button.setEnabled(not busy)
         self.refresh_models_button.setEnabled(not busy)
@@ -1111,6 +1123,8 @@ class CelesteWindow(QMainWindow):
         self.cfg = cfg if isinstance(cfg, AgentConfig) else None
         if self.cfg is not None:
             self._populate_from_config(self.cfg)
+        if self.chat_view.toPlainText().strip():
+            self._append_session_separator()
         self._append_system("Celeste backend is online.")
         self._set_busy(False, "Celeste ready.")
 
@@ -1204,6 +1218,11 @@ class CelesteWindow(QMainWindow):
                 "QProgressBar { background: #1a2530; border-radius: 3px; }"
                 f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
             )
+            if pct >= 90 and not getattr(self, "_ctx_warned", False):
+                self._ctx_warned = True
+                self._append_system("Context window is nearly full. Consider starting a new session for best results.")
+            elif pct < 90:
+                self._ctx_warned = False
 
     def _hide_stream_preview(self) -> None:
         self.stream_frame.hide()
@@ -1217,6 +1236,7 @@ class CelesteWindow(QMainWindow):
             self._append_chat("Critique", critique, "#ffd6a5")
         if improvements.strip():
             self._append_chat("Playbook", improvements, "#9fd3ff")
+        self._refresh_engram_count()
 
     @Slot(str)
     def _on_chat_finished(self, message: str) -> None:
@@ -1258,6 +1278,53 @@ class CelesteWindow(QMainWindow):
             self.worker.service.set_persona(dialog.get_preamble())
             self._append_system("Persona updated.")
 
+    def _export_chat(self) -> None:
+        from datetime import datetime
+        default_name = f"celeste_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        path, _ = QFileDialog.getSaveFileName(self, "Export Chat", default_name, "Markdown (*.md);;Text (*.txt)")
+        if not path:
+            return
+        plain = self.chat_view.toPlainText().strip()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"# Celeste Conversation Export\n")
+                f.write(f"_{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_\n\n")
+                f.write(plain)
+            self._append_system(f"Conversation exported to {os.path.basename(path)}")
+        except Exception as exc:
+            self._append_system(f"Export failed: {exc}")
+
+    def _append_session_separator(self) -> None:
+        self.chat_view.append(
+            "<div style='margin: 14px 0; text-align: center;'>"
+            "<hr style='border: none; border-top: 1px solid #25313d; margin: 0;'>"
+            "<span style='color: #4a6070; font-size: 11px;'>— new session —</span>"
+            "</div>"
+        )
+
+    def _refresh_engram_count(self) -> None:
+        try:
+            count = self.worker.service.get_engram_count()
+            self.engram_count_label.setText(f"Stored memories: {count:,}")
+        except Exception:
+            pass
+
+    def _refresh_deep_index_status(self, cfg) -> None:
+        try:
+            agent = self.worker.service.agent
+            if agent is None:
+                self.deep_index_status_label.setText("Deep index: not loaded")
+                return
+            use_embeddings = bool(getattr(cfg, "file_rag_use_embeddings", False))
+            if not use_embeddings:
+                self.deep_index_status_label.setText("Deep index: disabled (embeddings off)")
+            elif agent.file_rag.deep_index_available():
+                self.deep_index_status_label.setText("Deep index: active (semantic search enabled)")
+            else:
+                self.deep_index_status_label.setText("Deep index: not built — use Build Deep Index")
+        except Exception:
+            pass
+
     def _browse_piper_voice(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Piper Voice Model", "", "Piper ONNX Models (*.onnx)"
@@ -1288,6 +1355,8 @@ class CelesteWindow(QMainWindow):
             count = counts.get(path)
             label = f"{path} ({count} files)" if count is not None else path
             self.rag_dirs_list.addItem(label)
+        self._refresh_engram_count()
+        self._refresh_deep_index_status(cfg)
 
     def _model_label(self, path: str, *, duplicate: bool = False) -> str:
         base = os.path.basename(path)

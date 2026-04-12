@@ -495,3 +495,6 @@ class MemoryPipeline:
 
     def engram_stats(self) -> dict[str, int | bool]:
         return self.engram.stats()
+
+    def count(self) -> int:
+        return int(self.engram.stats().get("entries", 0))

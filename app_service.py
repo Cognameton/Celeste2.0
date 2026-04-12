@@ -181,6 +181,14 @@ class CelesteService:
         save_config(self.config_path, self.cfg)
         return self.cfg
 
+    def get_engram_count(self) -> int:
+        if self.agent is None:
+            return 0
+        try:
+            return self.agent.mem.count()
+        except Exception:
+            return 0
+
     def set_engram_auto_prune(self, enabled: bool) -> tuple[AgentConfig, dict[str, Any]]:
         if self.agent is None:
             self.start()
