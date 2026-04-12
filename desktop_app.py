@@ -644,6 +644,21 @@ class CelesteWindow(QMainWindow):
         self.tts_toggle = QCheckBox("Enable Piper speech")
         form.addRow("Speech", self.tts_toggle)
 
+        voice_row = QWidget()
+        voice_row_layout = QHBoxLayout(voice_row)
+        voice_row_layout.setContentsMargins(0, 0, 0, 0)
+        voice_row_layout.setSpacing(6)
+        self.piper_voice_label = QLabel("(none)")
+        self.piper_voice_label.setStyleSheet("color: #8da2b5;")
+        self.piper_voice_label.setMinimumWidth(120)
+        voice_row_layout.addWidget(self.piper_voice_label, 1)
+        self.piper_voice_browse = QPushButton("Browse…")
+        self.piper_voice_browse.setFixedWidth(80)
+        self.piper_voice_browse.clicked.connect(self._browse_piper_voice)
+        voice_row_layout.addWidget(self.piper_voice_browse)
+        form.addRow("Piper Voice", voice_row)
+        self._piper_voice_path: str = ""
+
         self.memory_toggle = QCheckBox("Use vector memory")
         form.addRow("Memory", self.memory_toggle)
 
@@ -1038,6 +1053,7 @@ class CelesteWindow(QMainWindow):
         self.reflection_model_combo.setEnabled(not busy)
         self.tokens_spin.setEnabled(not busy)
         self.tts_toggle.setEnabled(not busy)
+        self.piper_voice_browse.setEnabled(not busy)
         self.memory_toggle.setEnabled(not busy)
         self.reflection_toggle.setEnabled(not busy)
         self.rulebook_button.setEnabled(not busy)
@@ -1242,9 +1258,22 @@ class CelesteWindow(QMainWindow):
             self.worker.service.set_persona(dialog.get_preamble())
             self._append_system("Persona updated.")
 
+    def _browse_piper_voice(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Piper Voice Model", "", "Piper ONNX Models (*.onnx)"
+        )
+        if path:
+            self._piper_voice_path = path
+            self.piper_voice_label.setText(os.path.basename(path))
+            self.piper_voice_label.setToolTip(path)
+
     def _populate_from_config(self, cfg: AgentConfig) -> None:
         self._set_selected_model(cfg.model_path)
         self.tts_toggle.setChecked(bool(cfg.tts_enabled))
+        piper_model = str(getattr(cfg, "tts_piper_model", "") or "")
+        self._piper_voice_path = piper_model
+        self.piper_voice_label.setText(os.path.basename(piper_model) if piper_model else "(none)")
+        self.piper_voice_label.setToolTip(piper_model)
         self.memory_toggle.setChecked(bool(cfg.use_chroma))
         reflection_cfg = cfg.reflection or {}
         self.reflection_toggle.setChecked(bool(reflection_cfg.get("enabled", False)))
@@ -1418,6 +1447,12 @@ class CelesteWindow(QMainWindow):
         overrides = {
             "model_path": self._selected_model_path(),
             "tts_enabled": self.tts_toggle.isChecked(),
+            "tts_piper_model": self._piper_voice_path,
+            "tts_piper_config": (
+                self._piper_voice_path + ".json"
+                if self._piper_voice_path and os.path.isfile(self._piper_voice_path + ".json")
+                else None
+            ),
             "use_chroma": self.memory_toggle.isChecked(),
             "max_new_tokens": int(self.tokens_spin.value()),
             "reflection": reflection,
