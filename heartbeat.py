@@ -2,13 +2,15 @@
 
 A background thread that wakes on a timer. When the user is not actively
 interacting, it calls the LLM with a grounded prompt and gets back a
-structured tick: a private thought, optional want mutations, and an
-importance score. Every tick is appended to ``self/heartbeat/journal.jsonl``
-even when nothing changes — that journal is her authentic interior
-record, the thing she draws from when asked "what have you been doing?".
+structured tick: a private thought, optional want mutations, an importance
+score, and optional self-edits to AGENTS.md or USER.md.
 
-Self-edits to AGENTS.md/USER.md are not produced by this version. That
-arrives in phase 3b once the rate-limit and drift-check scaffolding is in.
+Self-edits are guarded by two layers:
+  - Rate-limit: max one edit per file per 6 hours, tracked in
+    self/heartbeat/edit_log.json.
+  - Drift-check: proposed edit must name a specific file in the allowed
+    set, carry a non-trivial reason grounded in recent context, and stay
+    within size bounds (no wholesale rewrites).
 """
 
 from __future__ import annotations
@@ -25,6 +27,16 @@ from typing import Any, Callable
 
 from self_state import SelfState
 from wants import WantsStore
+
+ALLOWED_SELF_EDIT_FILES = frozenset({"AGENTS.md", "USER.md"})
+_EDIT_COOLDOWN_S = 6 * 3600   # one edit per file per 6 hours
+_MIN_REASON_LEN = 20           # reason must be a real sentence, not a label
+_MAX_BODY_LEN = 800            # cap body to prevent wholesale rewrites
+_REASON_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "it", "to", "of", "and", "in", "that",
+    "was", "for", "on", "are", "with", "as", "this", "at", "be",
+    "by", "from", "or", "but", "not", "so", "we", "my", "i",
+})
 
 
 def _now() -> str:
@@ -48,6 +60,7 @@ class TickResult:
     wants_advanced: list[dict[str, Any]] = field(default_factory=list)
     wants_resolved: list[dict[str, Any]] = field(default_factory=list)
     wants_abandoned: list[dict[str, Any]] = field(default_factory=list)
+    self_edits: list[dict[str, Any]] = field(default_factory=list)
     parse_error: str | None = None
     raw: str = ""
 
@@ -77,6 +90,7 @@ class Heartbeat:
 
         self.journal_path = config.journal_path or (self_state.root / "heartbeat" / "journal.jsonl")
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+        self._edit_log_path = self.journal_path.parent / "edit_log.json"
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -173,16 +187,21 @@ class Heartbeat:
     # ---- tick ----
 
     def _run_tick(self) -> None:
-        prompt = self._build_prompt()
+        turns = self._recent_turns(4)
+        recent_text = " ".join(
+            t.get("content", "") for t in turns
+        ).lower()
+        prompt = self._build_prompt(turns=turns)
         raw = self._call_llm(prompt)
         result = self._parse(raw)
-        self._apply(result)
+        self._apply(result, recent_context=recent_text)
         self._last_tick_ts = time.time()
         self._tick_count += 1
 
-    def _build_prompt(self) -> str:
+    def _build_prompt(self, turns: list[dict[str, str]] | None = None) -> str:
         self_block = self.self_state.all_for_prompt().strip()
-        turns = self._recent_turns(4)
+        if turns is None:
+            turns = self._recent_turns(4)
         recent_block = "\n".join(
             f"{t.get('role','?')}: {t.get('content','').strip()[:400]}" for t in turns
         ) or "(none)"
@@ -212,6 +231,8 @@ Reflect on what you have noticed, want, or have learned. Stay grounded in actual
 
 Prefer advancing or resolving an existing want over generating a new one. Most ticks should be importance 0 — routine thinking with no outward change. Importance 3 is reserved for ticks where something genuinely shifted.
 
+Self-edits (AGENTS.md or USER.md) are rare. Only propose one if you have a concrete, specific reason grounded in something that actually happened in the recent turns above — a correction from Shane, a confirmed preference, a lesson from a mistake. Do not write self-edits speculatively or to fill the field. If nothing warrants a self-edit, leave the list empty. Allowed files: AGENTS.md, USER.md. Allowed operation: append_section only.
+
 Output only valid JSON in exactly this shape, no other text:
 {{
   "private_thought": "string — what you are noticing or considering",
@@ -219,7 +240,16 @@ Output only valid JSON in exactly this shape, no other text:
   "wants_added": [{{"text": "string", "priority": 3}}],
   "wants_advanced": [{{"id": "want-id", "note": "what changed"}}],
   "wants_resolved": [{{"id": "want-id", "outcome": "how it resolved"}}],
-  "wants_abandoned": [{{"id": "want-id", "reason": "why letting go"}}]
+  "wants_abandoned": [{{"id": "want-id", "reason": "why letting go"}}],
+  "self_edits": [
+    {{
+      "file": "AGENTS.md",
+      "operation": "append_section",
+      "heading": "short heading",
+      "body": "what to record — specific, grounded, under 800 chars",
+      "reason": "concrete reason this warrants writing down — must reference something from the recent turns above"
+    }}
+  ]
 }}
 
 If there is nothing new to add to a list, leave it empty. Output only the JSON object."""
@@ -262,7 +292,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             result.importance = max(0, min(3, int(data.get("importance", 0))))
         except (TypeError, ValueError):
             result.importance = 0
-        for key in ("wants_added", "wants_advanced", "wants_resolved", "wants_abandoned"):
+        for key in ("wants_added", "wants_advanced", "wants_resolved", "wants_abandoned", "self_edits"):
             value = data.get(key) or []
             if isinstance(value, list):
                 setattr(result, key, [v for v in value if isinstance(v, dict)])
@@ -286,11 +316,70 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                     return cleaned[start:i + 1]
         return None
 
+    # ---- rate-limit & drift-check ----
+
+    def _load_edit_log(self) -> dict[str, str]:
+        if not self._edit_log_path.exists():
+            return {}
+        try:
+            return json.loads(self._edit_log_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_edit_log(self, log: dict[str, str]) -> None:
+        self._edit_log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _rate_limit_ok(self, filename: str, log: dict[str, str]) -> bool:
+        last_str = log.get(filename)
+        if not last_str:
+            return True
+        try:
+            last_ts = datetime.fromisoformat(last_str.replace("Z", "+00:00"))
+            elapsed = (datetime.now(timezone.utc) - last_ts).total_seconds()
+            return elapsed >= _EDIT_COOLDOWN_S
+        except Exception:
+            return True
+
+    def _drift_check(self, edit: dict[str, Any], recent_context: str) -> str | None:
+        """Return a rejection reason string, or None if the edit passes."""
+        filename = str(edit.get("file", "")).strip()
+        if filename not in ALLOWED_SELF_EDIT_FILES:
+            return f"file '{filename}' not in allowed set"
+
+        operation = str(edit.get("operation", "")).strip()
+        if operation != "append_section":
+            return f"operation '{operation}' not allowed; only append_section"
+
+        heading = str(edit.get("heading", "")).strip()
+        if not heading:
+            return "heading is empty"
+
+        body = str(edit.get("body", "")).strip()
+        if len(body) < 10:
+            return "body too short"
+        if len(body) > _MAX_BODY_LEN:
+            return f"body too long ({len(body)} chars > {_MAX_BODY_LEN})"
+
+        reason = str(edit.get("reason", "")).strip()
+        if len(reason) < _MIN_REASON_LEN:
+            return f"reason too short ({len(reason)} chars < {_MIN_REASON_LEN})"
+
+        # Reason must share at least one non-trivial word with recent context.
+        reason_words = {
+            w for w in re.sub(r"[^a-z0-9]+", " ", reason.lower()).split()
+            if len(w) > 3 and w not in _REASON_STOPWORDS
+        }
+        context_words = set(re.sub(r"[^a-z0-9]+", " ", recent_context).split())
+        if reason_words and not reason_words.intersection(context_words):
+            return "reason not grounded in recent context"
+
+        return None
+
     # ---- apply ----
 
-    def _apply(self, result: TickResult) -> None:
+    def _apply(self, result: TickResult, recent_context: str = "") -> None:
         # Always journal — even no-ops, even parse failures
-        entry = {
+        entry: dict[str, Any] = {
             "ts": _now(),
             "importance": result.importance,
             "private_thought": result.private_thought,
@@ -298,6 +387,8 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             "wants_advanced": [],
             "wants_resolved": [],
             "wants_abandoned": [],
+            "self_edits_applied": [],
+            "self_edits_rejected": [],
             "parse_error": result.parse_error,
         }
 
@@ -329,6 +420,40 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             reason = str(spec.get("reason", "")).strip()
             if wid and self.wants.abandon(wid, reason):
                 entry["wants_abandoned"].append({"id": wid, "reason": reason})
+
+        if result.self_edits:
+            edit_log = self._load_edit_log()
+            for edit in result.self_edits:
+                filename = str(edit.get("file", "")).strip()
+                rejection = self._drift_check(edit, recent_context)
+                if rejection:
+                    entry["self_edits_rejected"].append({"file": filename, "reason": rejection})
+                    logging.info("Heartbeat self-edit rejected (%s): %s", filename, rejection)
+                    continue
+                if not self._rate_limit_ok(filename, edit_log):
+                    entry["self_edits_rejected"].append({"file": filename, "reason": "rate-limited"})
+                    logging.info("Heartbeat self-edit rate-limited: %s", filename)
+                    continue
+                try:
+                    heading = str(edit.get("heading", "")).strip()
+                    body = str(edit.get("body", "")).strip()
+                    self.self_state.append_section(
+                        filename,
+                        heading,
+                        body,
+                        message=f"Heartbeat append: {heading}",
+                    )
+                    edit_log[filename] = _now()
+                    self._save_edit_log(edit_log)
+                    entry["self_edits_applied"].append({
+                        "file": filename,
+                        "heading": heading,
+                        "reason": str(edit.get("reason", "")).strip(),
+                    })
+                    logging.info("Heartbeat self-edit applied: %s / %s", filename, heading)
+                except Exception as exc:
+                    entry["self_edits_rejected"].append({"file": filename, "reason": f"write error: {exc}"})
+                    logging.exception("Heartbeat self-edit write failed: %s", filename)
 
         with self.journal_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
