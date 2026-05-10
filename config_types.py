@@ -12,7 +12,7 @@ class AgentConfig(BaseModel):
     max_new_tokens: int = 512
 
     # llama.cpp settings
-    n_ctx: int = 4096
+    n_ctx: int = 8192
     n_threads: int = 8
     n_gpu_layers: int = 0
     split_mode: int = 1
@@ -60,3 +60,4 @@ class AgentConfig(BaseModel):
     reflection: dict[str, Any] = Field(default_factory=dict)
     behavior_flags: dict[str, Any] = Field(default_factory=dict)
     memory: dict[str, Any] = Field(default_factory=dict)
+    heartbeat: dict[str, Any] = Field(default_factory=dict)

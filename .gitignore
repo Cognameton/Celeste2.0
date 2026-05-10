@@ -13,6 +13,7 @@ dist/
 vendor/
 
 config.yaml
+self/
 *.gguf
 !models/**/*.gguf
 !models/*.gguf

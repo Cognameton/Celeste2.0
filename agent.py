@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import re
+import time
 from typing import Callable, Dict, Any, Tuple, Optional, List
 
 from rich.console import Console
@@ -13,6 +14,9 @@ from memory import MemoryPipeline
 from file_rag import FileRAG, FILE_RAG_INDEX_KIND_SEMANTIC, FILE_RAG_INDEX_KIND_TFIDF
 from reflection import Reflector
 from playbook import Playbook
+from self_state import SelfState
+from wants import WantsStore
+from heartbeat import Heartbeat, HeartbeatConfig
 from tts import TTSManager
 from graph_facts import (
     record_runtime_graph_facts,
@@ -30,8 +34,6 @@ class Agent:
         self._emit_status("Preparing Celeste workspace...")
         os.makedirs(self.cfg.data_dir, exist_ok=True)
 
-        # Defaults for self-state
-        self._default_state = {"identity": "Celeste", "focus": "helpful, precise, offline"}
         self._live_guidance: str = ""
         self._tracking_session: dict[str, Any] | None = None
         self._recent_turns: list[dict[str, str]] = []
@@ -91,11 +93,31 @@ class Agent:
         self.tts = TTSManager(cfg)
         self._last_prompt_tokens: int = 0
 
-        # Self-state (identity/focus/etc.)
-        self.self_state_path = os.path.join(self.cfg.data_dir, "self_state.json")
-        if not os.path.exists(self.self_state_path):
-            with open(self.self_state_path, "w", encoding="utf-8") as f:
-                json.dump(self._default_state, f, indent=2)
+        # Persistent self-state (filesystem-as-self; see self_state.py)
+        self._emit_status("Loading self-state...")
+        self.self_state = SelfState.initialize()
+        self.wants = WantsStore(self.self_state.root / "wants")
+
+        # Heartbeat — idle thinking loop
+        self._in_chat = False
+        self._last_user_ts: float = 0.0
+        hb_cfg_dict = dict(getattr(cfg, "heartbeat", {}) or {})
+        hb_cfg = HeartbeatConfig(
+            enabled=bool(hb_cfg_dict.get("enabled", True)),
+            tick_interval_s=int(hb_cfg_dict.get("tick_interval_s", 300)),
+            idle_threshold_s=int(hb_cfg_dict.get("idle_threshold_s", 90)),
+            max_tick_tokens=int(hb_cfg_dict.get("max_tick_tokens", 600)),
+        )
+        self.heartbeat = Heartbeat(
+            llm=self.llm,
+            self_state=self.self_state,
+            wants=self.wants,
+            config=hb_cfg,
+            is_busy=lambda: self._in_chat,
+            last_user_activity_ts=lambda: self._last_user_ts,
+            recent_turns=lambda n: list(self._recent_turns[-n:]),
+        )
+        self.heartbeat.start()
         self._emit_status("Celeste startup complete.")
 
     def _emit_status(self, message: str) -> None:
@@ -104,6 +126,10 @@ class Agent:
             self._status_cb(message)
 
     def close(self) -> None:
+        try:
+            self.heartbeat.stop()
+        except Exception:
+            pass
         try:
             self.tts.shutdown()
         except Exception:
@@ -141,58 +167,6 @@ class Agent:
             return bool(reflection_cfg.get("enabled", False))
         return False
 
-    # ---------- Self-state ----------
-    def _load_self_state(self) -> Dict[str, Any]:
-        try:
-            with open(self.self_state_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-        except Exception:
-            raw = {}
-        return self._sanitize_self_state(raw)
-
-    def _save_self_state(self, state: Dict[str, Any]) -> None:
-        clean = self._sanitize_self_state(state)
-        with open(self.self_state_path, "w", encoding="utf-8") as f:
-            json.dump(clean, f, indent=2)
-
-    def _sanitize_self_state(self, state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Ensure identity/focus stay populated with simple strings."""
-        clean: Dict[str, Any] = dict(self._default_state)
-        if isinstance(state, dict):
-            for key, value in state.items():
-                if key in ("identity", "focus"):
-                    if isinstance(value, str) and value.strip():
-                        clean[key] = value.strip()
-                else:
-                    clean[key] = value
-        return clean
-
-    def _maybe_update_identity(self, user_msg: str) -> None:
-        """
-        Detect patterns like 'your name is ...' and persist the provided identity.
-        Keeps existing identity when the extracted value is empty.
-        """
-        lowered = user_msg.lower()
-        trigger = "your name is"
-        if trigger not in lowered:
-            return
-
-        # Naive span capture after the trigger; accept up to sentence end.
-        try:
-            start = lowered.index(trigger) + len(trigger)
-            proposed = user_msg[start:].strip(" .!?\n\t\"'")
-            if proposed:
-                state = self._load_self_state()
-                state["identity"] = proposed
-                self._save_self_state(state)
-                self.mem.add(
-                    f"Assistant identity updated to {proposed}",
-                    kind="meta",
-                    metadata={"via": "identity-update"},
-                )
-        except ValueError:
-            pass
-
     # ---------- Prompt pieces ----------
     def _on_reflection_add(self, text: str) -> None:
         self.playbook.add_rule(text, source="teacher")
@@ -206,11 +180,23 @@ class Agent:
             self.reflection_flag_cb(reason)
 
     def build_system_prompt(self, query: str = "") -> str:
-        self_state = self._load_self_state()
         playbook_text = self.playbook.format_for_prompt(query=query, top_k=5).strip()
+        self_block = self.self_state.all_for_prompt().strip()
+        interior_block = ""
+        try:
+            interior_block = self.heartbeat.interior_for_prompt().strip()
+        except Exception:
+            interior_block = ""
 
-        parts: List[str] = [
-            (self.cfg.system_preamble or "").strip(),
+        parts: List[str] = []
+        if self_block:
+            parts.append("[Self]\n" + self_block)
+        if interior_block:
+            parts.append("[Interior]\n" + interior_block)
+        preamble = (self.cfg.system_preamble or "").strip()
+        if preamble:
+            parts.append(preamble)
+        parts.append(
             "[Behavior]\n"
             "- Reply concisely.\n"
             "- For code/IT tasks, use ordered steps.\n"
@@ -224,9 +210,9 @@ class Agent:
             "- Propose actionable plans or alternatives when direct execution is impossible.\n"
             "- Avoid apologizing for being an AI unless safety limits require refusal.\n"
             "- Only decline when the task is unsafe/illegal or truly impossible due to missing hardware; otherwise describe a workaround or best-effort assistance.\n"
-            "- Do not quote or echo the raw memory notes verbatim; speak naturally.",
-            "[Self-State]\n" + json.dumps(self_state, ensure_ascii=False, indent=2),
-        ]
+            "- Do not quote or echo the raw memory notes verbatim; speak naturally.\n"
+            "- If asked about your interior life — what you have been thinking, your wants, what you have been doing while away — answer only from the [Interior] block above. If [Interior] is empty, say plainly that you have not had any private thoughts yet. Never fabricate an interior to play a role."
+        )
         if playbook_text:
             parts.append("[Playbook]\n" + playbook_text)
         if getattr(self, "_live_guidance", None):
@@ -322,13 +308,11 @@ class Agent:
             or u.startswith("who are you")
         )
         if identity_triggers:
-            name = self._load_self_state().get("identity", self._default_state["identity"])
-            return f"My name is {name}."
+            return f"My name is {self.self_state.name}."
 
         # If the model volunteered its name without being asked, steer back to helping
         if not identity_triggers and a.lower().startswith("my name is"):
-            name = self._load_self_state().get("identity", self._default_state["identity"])
-            return f"I'm {name}, ready to help you with whatever you need."
+            return f"I'm {self.self_state.name}, ready to help you with whatever you need."
 
         # If user refers to themselves (my/I), answer in second person
         if " my " in f" {u} " or u.startswith("my ") or " i " in f" {u} ":
@@ -1022,6 +1006,14 @@ class Agent:
 
     # ---------- Main interaction ----------
     def respond(self, user: str, token_cb: Callable[[str], None] | None = None) -> Tuple[str, Optional[str], Optional[str]]:
+        self._in_chat = True
+        self._last_user_ts = time.time()
+        try:
+            return self._respond_impl(user, token_cb)
+        finally:
+            self._in_chat = False
+
+    def _respond_impl(self, user: str, token_cb: Callable[[str], None] | None = None) -> Tuple[str, Optional[str], Optional[str]]:
         u_strip = user.strip()
         u_low = u_strip.lower()
         library_requested = self._is_library_requested(u_strip)
@@ -1146,9 +1138,6 @@ class Agent:
             self._append_recent_turn("user", user)
             self._append_recent_turn("assistant", answer)
             return answer, None, None
-
-        # Update identity when the user explicitly assigns one
-        self._maybe_update_identity(u_strip)
 
         # Prepare system + trimmed memory notes with a strict budget (~25% of context)
         system = self.build_system_prompt(query=u_strip)

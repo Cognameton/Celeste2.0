@@ -21,13 +21,24 @@ def resource_path(*parts: str) -> str:
     return os.path.join(resource_root(), *parts)
 
 
+_APP_NAME = "Celeste2"
+
+
+def _user_data_root() -> str:
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, _APP_NAME)
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, _APP_NAME)
+
+
 def default_config_path() -> str:
     if not getattr(sys, "frozen", False):
         return os.path.join(runtime_root(), "config.yaml")
+    return os.path.join(_user_data_root(), "config.yaml")
 
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "Celeste", "config.yaml")
 
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "Celeste", "config.yaml")
+def default_self_path() -> str:
+    if not getattr(sys, "frozen", False):
+        return os.path.join(runtime_root(), "self")
+    return os.path.join(_user_data_root(), "self")
