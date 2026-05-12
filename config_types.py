@@ -61,3 +61,4 @@ class AgentConfig(BaseModel):
     behavior_flags: dict[str, Any] = Field(default_factory=dict)
     memory: dict[str, Any] = Field(default_factory=dict)
     heartbeat: dict[str, Any] = Field(default_factory=dict)
+    context_compression: dict[str, Any] = Field(default_factory=dict)

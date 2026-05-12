@@ -107,3 +107,13 @@ file_rag_use_embeddings: true
 file_rag_embedding_device: auto
 file_rag_share_embedder: false
 file_rag_multi_gpu: true
+heartbeat:
+  enabled: true
+  tick_interval_s: 300
+  idle_threshold_s: 90
+  max_tick_tokens: 600
+context_compression:
+  enabled: true
+  max_turns: 16
+  keep_turns: 6
+  max_summary_tokens: 500

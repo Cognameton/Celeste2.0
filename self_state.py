@@ -96,6 +96,15 @@ class SelfState:
         section = f"\n\n### {heading}\n_{stamp}_\n\n{body.rstrip()}\n"
         self.write(name, existing + section, message=message)
 
+    def write_skill(self, slug: str, content: str, *, message: str) -> None:
+        """Create or update a skill at self/skills/<slug>/SKILL.md."""
+        skill_dir = self.root / "skills" / slug
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_text(content, encoding="utf-8")
+        rel = f"skills/{slug}/SKILL.md"
+        _git_commit(self.root, [rel], message)
+
     # ---- bootstrap ----
 
     def has_bootstrap(self) -> bool:

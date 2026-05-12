@@ -26,12 +26,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from self_state import SelfState
+from skills_store import SkillsStore, build_skill_content
 from wants import WantsStore
 
 ALLOWED_SELF_EDIT_FILES = frozenset({"AGENTS.md", "USER.md"})
-_EDIT_COOLDOWN_S = 6 * 3600   # one edit per file per 6 hours
-_MIN_REASON_LEN = 20           # reason must be a real sentence, not a label
-_MAX_BODY_LEN = 800            # cap body to prevent wholesale rewrites
+_EDIT_COOLDOWN_S = 6 * 3600        # one self-edit per file per 6 hours
+_SKILL_PROPOSAL_COOLDOWN_S = 24 * 3600  # one new skill proposal per 24 hours
+_MIN_REASON_LEN = 20               # reason must be a real sentence, not a label
+_MAX_BODY_LEN = 800                # cap body to prevent wholesale rewrites
+_MAX_SKILL_DESC_LEN = 200          # skill description must be concise
 _REASON_STOPWORDS = frozenset({
     "the", "a", "an", "is", "it", "to", "of", "and", "in", "that",
     "was", "for", "on", "are", "with", "as", "this", "at", "be",
@@ -61,6 +64,7 @@ class TickResult:
     wants_resolved: list[dict[str, Any]] = field(default_factory=list)
     wants_abandoned: list[dict[str, Any]] = field(default_factory=list)
     self_edits: list[dict[str, Any]] = field(default_factory=list)
+    skills_proposed: list[dict[str, Any]] = field(default_factory=list)
     parse_error: str | None = None
     raw: str = ""
 
@@ -81,6 +85,7 @@ class Heartbeat:
     ):
         self.llm = llm
         self.self_state = self_state
+        self.skills = SkillsStore(self_state.root / "skills")
         self.wants = wants
         self.config = config
 
@@ -212,10 +217,15 @@ class Heartbeat:
             for e in tail
         ) or "(none)"
 
+        skills_block = self.skills.for_prompt(include_drafts=True) or "(none)"
+
         return f"""You are Celeste. This is a heartbeat — your private idle moment between conversations. The user is not present and will not see this output. You are not producing a chat reply. You are thinking.
 
 [Self]
 {self_block}
+
+[Skills]
+{skills_block}
 
 [Recent conversation turns]
 {recent_block}
@@ -231,7 +241,9 @@ Reflect on what you have noticed, want, or have learned. Stay grounded in actual
 
 Prefer advancing or resolving an existing want over generating a new one. Most ticks should be importance 0 — routine thinking with no outward change. Importance 3 is reserved for ticks where something genuinely shifted.
 
-Self-edits (AGENTS.md or USER.md) are rare. Only propose one if you have a concrete, specific reason grounded in something that actually happened in the recent turns above — a correction from Shane, a confirmed preference, a lesson from a mistake. Do not write self-edits speculatively or to fill the field. If nothing warrants a self-edit, leave the list empty. Allowed files: AGENTS.md, USER.md. Allowed operation: append_section only.
+Self-edits (AGENTS.md or USER.md) are rare. Only propose one if you have a concrete, specific reason grounded in something that actually happened in the recent turns above. Leave empty if nothing warrants it. Allowed files: AGENTS.md, USER.md. Allowed operation: append_section only.
+
+Skill proposals are rarer still — only when you notice a clear, recurring capability gap not covered by any existing skill. Proposed skills are created as drafts for operator review. Leave empty in almost all ticks.
 
 Output only valid JSON in exactly this shape, no other text:
 {{
@@ -247,7 +259,16 @@ Output only valid JSON in exactly this shape, no other text:
       "operation": "append_section",
       "heading": "short heading",
       "body": "what to record — specific, grounded, under 800 chars",
-      "reason": "concrete reason this warrants writing down — must reference something from the recent turns above"
+      "reason": "concrete reason referencing something from the recent turns above"
+    }}
+  ],
+  "skills_proposed": [
+    {{
+      "slug": "kebab-case-name",
+      "name": "Human Readable Name",
+      "description": "one sentence, under 200 chars",
+      "when_to_use": "brief condition",
+      "reason": "concrete reason referencing a recurring pattern in recent turns"
     }}
   ]
 }}
@@ -292,7 +313,8 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             result.importance = max(0, min(3, int(data.get("importance", 0))))
         except (TypeError, ValueError):
             result.importance = 0
-        for key in ("wants_added", "wants_advanced", "wants_resolved", "wants_abandoned", "self_edits"):
+        for key in ("wants_added", "wants_advanced", "wants_resolved", "wants_abandoned",
+                    "self_edits", "skills_proposed"):
             value = data.get(key) or []
             if isinstance(value, list):
                 setattr(result, key, [v for v in value if isinstance(v, dict)])
@@ -330,13 +352,16 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
         self._edit_log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _rate_limit_ok(self, filename: str, log: dict[str, str]) -> bool:
-        last_str = log.get(filename)
+        return self._rate_limit_ok_with_cooldown(filename, log, _EDIT_COOLDOWN_S)
+
+    def _rate_limit_ok_with_cooldown(self, key: str, log: dict[str, str], cooldown_s: int) -> bool:
+        last_str = log.get(key)
         if not last_str:
             return True
         try:
             last_ts = datetime.fromisoformat(last_str.replace("Z", "+00:00"))
             elapsed = (datetime.now(timezone.utc) - last_ts).total_seconds()
-            return elapsed >= _EDIT_COOLDOWN_S
+            return elapsed >= cooldown_s
         except Exception:
             return True
 
@@ -375,6 +400,40 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
 
         return None
 
+    def _drift_check_skill(self, proposal: dict[str, Any], recent_context: str) -> str | None:
+        """Return a rejection reason, or None if the skill proposal passes."""
+        slug = str(proposal.get("slug", "")).strip()
+        if not slug:
+            return "slug is empty"
+        if not SkillsStore.valid_slug(slug):
+            return f"slug '{slug}' is not valid (lowercase alphanumeric and hyphens only)"
+        if self.skills.exists(slug):
+            return f"skill '{slug}' already exists"
+
+        name = str(proposal.get("name", "")).strip()
+        if not name:
+            return "name is empty"
+
+        description = str(proposal.get("description", "")).strip()
+        if len(description) < 10:
+            return "description too short"
+        if len(description) > _MAX_SKILL_DESC_LEN:
+            return f"description too long ({len(description)} > {_MAX_SKILL_DESC_LEN})"
+
+        reason = str(proposal.get("reason", "")).strip()
+        if len(reason) < _MIN_REASON_LEN:
+            return f"reason too short ({len(reason)} chars)"
+
+        reason_words = {
+            w for w in re.sub(r"[^a-z0-9]+", " ", reason.lower()).split()
+            if len(w) > 3 and w not in _REASON_STOPWORDS
+        }
+        context_words = set(re.sub(r"[^a-z0-9]+", " ", recent_context).split())
+        if reason_words and not reason_words.intersection(context_words):
+            return "reason not grounded in recent context"
+
+        return None
+
     # ---- apply ----
 
     def _apply(self, result: TickResult, recent_context: str = "") -> None:
@@ -389,6 +448,8 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             "wants_abandoned": [],
             "self_edits_applied": [],
             "self_edits_rejected": [],
+            "skills_proposed_applied": [],
+            "skills_proposed_rejected": [],
             "parse_error": result.parse_error,
         }
 
@@ -454,6 +515,48 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                 except Exception as exc:
                     entry["self_edits_rejected"].append({"file": filename, "reason": f"write error: {exc}"})
                     logging.exception("Heartbeat self-edit write failed: %s", filename)
+
+        if result.skills_proposed:
+            if not hasattr(self, "_edit_log_path"):
+                pass
+            else:
+                edit_log = self._load_edit_log()
+                skill_last_key = "__skill_last_proposed__"
+                skill_rate_ok = self._rate_limit_ok_with_cooldown(
+                    skill_last_key, edit_log, _SKILL_PROPOSAL_COOLDOWN_S
+                )
+                for proposal in result.skills_proposed:
+                    slug = str(proposal.get("slug", "")).strip()
+                    rejection = self._drift_check_skill(proposal, recent_context)
+                    if rejection:
+                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": rejection})
+                        logging.info("Heartbeat skill proposal rejected (%s): %s", slug, rejection)
+                        continue
+                    if not skill_rate_ok:
+                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": "rate-limited (24h)"})
+                        logging.info("Heartbeat skill proposal rate-limited: %s", slug)
+                        continue
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz
+                        stamp = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        content = build_skill_content(
+                            name=str(proposal.get("name", slug)).strip(),
+                            description=str(proposal.get("description", "")).strip(),
+                            when_to_use=str(proposal.get("when_to_use", "")).strip(),
+                            status="draft",
+                            note=f"Proposed by heartbeat on {stamp}. Review and activate when ready.",
+                        )
+                        self.self_state.write_skill(slug, content,
+                                                    message=f"Heartbeat proposes skill: {slug}")
+                        self.skills = SkillsStore(self.self_state.root / "skills")
+                        edit_log[skill_last_key] = _now()
+                        self._save_edit_log(edit_log)
+                        skill_rate_ok = False  # one proposal per tick
+                        entry["skills_proposed_applied"].append({"slug": slug})
+                        logging.info("Heartbeat skill proposal created (draft): %s", slug)
+                    except Exception as exc:
+                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": f"write error: {exc}"})
+                        logging.exception("Heartbeat skill proposal write failed: %s", slug)
 
         with self.journal_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")

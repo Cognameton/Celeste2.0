@@ -15,8 +15,10 @@ from file_rag import FileRAG, FILE_RAG_INDEX_KIND_SEMANTIC, FILE_RAG_INDEX_KIND_
 from reflection import Reflector
 from playbook import Playbook
 from self_state import SelfState
+from skills_store import SkillsStore
 from wants import WantsStore
 from heartbeat import Heartbeat, HeartbeatConfig
+from context_compressor import ContextCompressor
 from tts import TTSManager
 from graph_facts import (
     record_runtime_graph_facts,
@@ -96,6 +98,7 @@ class Agent:
         # Persistent self-state (filesystem-as-self; see self_state.py)
         self._emit_status("Loading self-state...")
         self.self_state = SelfState.initialize()
+        self.skills = SkillsStore(self.self_state.root / "skills")
         self.wants = WantsStore(self.self_state.root / "wants")
 
         # Heartbeat — idle thinking loop
@@ -118,6 +121,16 @@ class Agent:
             recent_turns=lambda n: list(self._recent_turns[-n:]),
         )
         self.heartbeat.start()
+
+        # Context compressor — summarizes old turns for long-session coherence
+        comp_cfg = dict(getattr(cfg, "context_compression", {}) or {})
+        self.compressor = ContextCompressor(
+            self.llm,
+            max_turns=int(comp_cfg.get("max_turns", 16)),
+            keep_turns=int(comp_cfg.get("keep_turns", 6)),
+            max_summary_tokens=int(comp_cfg.get("max_summary_tokens", 500)),
+        ) if bool(comp_cfg.get("enabled", True)) else None
+
         self._emit_status("Celeste startup complete.")
 
     def _emit_status(self, message: str) -> None:
@@ -187,12 +200,19 @@ class Agent:
             interior_block = self.heartbeat.interior_for_prompt().strip()
         except Exception:
             interior_block = ""
+        skills_block = ""
+        try:
+            skills_block = self.skills.for_prompt().strip()
+        except Exception:
+            skills_block = ""
 
         parts: List[str] = []
         if self_block:
             parts.append("[Self]\n" + self_block)
         if interior_block:
             parts.append("[Interior]\n" + interior_block)
+        if skills_block:
+            parts.append("[Skills]\n" + skills_block)
         preamble = (self.cfg.system_preamble or "").strip()
         if preamble:
             parts.append(preamble)
@@ -272,9 +292,23 @@ class Agent:
     def _format_recent_turns(self, token_budget: int, per_turn_chars: int = 900) -> str:
         if not self._recent_turns or token_budget <= 0:
             return ""
+
+        # Pull out the summary block if present (always at position 0)
+        summary_entry = None
+        raw_turns = self._recent_turns
+        if self._recent_turns and self._recent_turns[0].get("role") == "summary":
+            summary_entry = self._recent_turns[0]
+            raw_turns = self._recent_turns[1:]
+
+        summary_text = ""
+        if summary_entry:
+            summary_text = "[Session Memory]\n" + (summary_entry.get("content") or "").strip()
+            summary_cost = self._count_tokens(summary_text) + 2
+            token_budget = max(0, token_budget - summary_cost)
+
         kept: list[str] = []
         consumed = 0
-        for turn in reversed(self._recent_turns[-12:]):
+        for turn in reversed(raw_turns[-12:]):
             role = "User" if turn.get("role") == "user" else "Celeste"
             content = (turn.get("content") or "").replace("\n", " ").strip()
             if len(content) > per_turn_chars:
@@ -285,10 +319,16 @@ class Agent:
                 break
             kept.append(line)
             consumed += cost
-        if not kept:
+
+        if not kept and not summary_text:
             return ""
         kept.reverse()
-        return "Recent Conversation:\n" + "\n".join(kept)
+        parts = []
+        if summary_text:
+            parts.append(summary_text)
+        if kept:
+            parts.append("Recent Conversation:\n" + "\n".join(kept))
+        return "\n\n".join(parts)
 
     # ---------- Perspective guard ----------
     def _enforce_perspective(self, user_msg: str, answer: str) -> str:
@@ -1014,6 +1054,10 @@ class Agent:
             self._in_chat = False
 
     def _respond_impl(self, user: str, token_cb: Callable[[str], None] | None = None) -> Tuple[str, Optional[str], Optional[str]]:
+        # Compress old turns before building the prompt
+        if self.compressor is not None and self.compressor.should_compress(self._recent_turns):
+            self._recent_turns = self.compressor.compress(self._recent_turns)
+
         u_strip = user.strip()
         u_low = u_strip.lower()
         library_requested = self._is_library_requested(u_strip)
