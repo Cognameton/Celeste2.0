@@ -17,6 +17,7 @@ from playbook import Playbook
 from self_state import SelfState
 from skills_store import SkillsStore
 from wants import WantsStore
+from project_store import ProjectStore
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
 from tts import TTSManager
@@ -100,6 +101,7 @@ class Agent:
         self.self_state = SelfState.initialize()
         self.skills = SkillsStore(self.self_state.root / "skills")
         self.wants = WantsStore(self.self_state.root / "wants")
+        self.projects = ProjectStore(self.self_state.root / "projects")
 
         # Heartbeat — idle thinking loop
         self._in_chat = False
@@ -205,6 +207,11 @@ class Agent:
             skills_block = self.skills.for_prompt().strip()
         except Exception:
             skills_block = ""
+        projects_block = ""
+        try:
+            projects_block = self.projects.for_prompt().strip()
+        except Exception:
+            projects_block = ""
 
         parts: List[str] = []
         if self_block:
@@ -213,6 +220,8 @@ class Agent:
             parts.append("[Interior]\n" + interior_block)
         if skills_block:
             parts.append("[Skills]\n" + skills_block)
+        if projects_block:
+            parts.append("[Projects]\n" + projects_block)
         preamble = (self.cfg.system_preamble or "").strip()
         if preamble:
             parts.append(preamble)
