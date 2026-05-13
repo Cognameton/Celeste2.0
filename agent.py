@@ -215,18 +215,23 @@ class Agent:
     def _on_reflection_skill_draft(
         self, name: str, description: str, when_to_use: str, body: str
     ) -> None:
-        import re as _re
-        slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "skill"
-        base, i = slug, 2
-        while self.skills.exists(slug):
-            slug = f"{base}-{i}"
-            i += 1
-        content = build_skill_content(
-            name, description, when_to_use, status="draft", note="auto-proposed by reflector"
-        )
-        self.self_state.write_skill(slug, content, message=f"Skill draft: {name}")
-        self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
-        logging.info("Reflector: skill draft created: %s", slug)
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "skill"
+        existing = self.skills.get(slug)
+        if existing and existing.status == "draft":
+            # Second sighting of this pattern — promote draft to active
+            if self.skills.promote(slug):
+                self.learnings.append(
+                    "skill_draft", f"{name}: promoted to active", trigger="reflector-confirm"
+                )
+                logging.info("Reflector: skill draft promoted to active: %s", slug)
+                return
+        if not self.skills.exists(slug):
+            content = build_skill_content(
+                name, description, when_to_use, status="draft", note="auto-proposed by reflector"
+            )
+            self.skills.create(slug, content, message=f"Skill draft: {name}")
+            self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
+            logging.info("Reflector: skill draft created: %s", slug)
 
     def build_system_prompt(self, query: str = "") -> str:
         playbook_text = self.playbook.format_for_prompt(query=query, top_k=5).strip()

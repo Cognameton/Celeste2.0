@@ -12,6 +12,7 @@ changing status to active.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,10 +32,10 @@ class Skill:
 
 
 class SkillsStore:
-    """Read-only view of the skills directory. Write operations go through SelfState."""
-
     def __init__(self, root: Path | str):
         self.root = Path(root)
+
+    # ---- read ----
 
     def load(self) -> list[Skill]:
         if not self.root.exists():
@@ -50,6 +51,12 @@ class SkillsStore:
             if skill is not None:
                 skills.append(skill)
         return skills
+
+    def get(self, slug: str) -> Skill | None:
+        path = self.root / slug / "SKILL.md"
+        if not path.exists():
+            return None
+        return _parse_skill(slug, path.read_text(encoding="utf-8"))
 
     def for_prompt(self, include_drafts: bool = False) -> str:
         skills = [
@@ -72,6 +79,53 @@ class SkillsStore:
     @staticmethod
     def valid_slug(slug: str) -> bool:
         return bool(_VALID_SLUG_RE.match(slug)) and ".." not in slug
+
+    # ---- write ----
+
+    def create(self, slug: str, content: str, *, message: str = "") -> None:
+        skill_dir = self.root / slug
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+        _git_add_commit(
+            self.root.parent,
+            f"skills/{slug}/SKILL.md",
+            message or f"Add skill: {slug}",
+        )
+
+    def promote(self, slug: str) -> bool:
+        """Promote a draft skill to active. Returns True if status changed."""
+        path = self.root / slug / "SKILL.md"
+        if not path.exists():
+            return False
+        original = path.read_text(encoding="utf-8")
+        updated = re.sub(
+            r"^(status:\s*)draft\s*$", r"\g<1>active", original, flags=re.MULTILINE
+        )
+        if updated == original:
+            return False
+        path.write_text(updated, encoding="utf-8")
+        _git_add_commit(self.root.parent, f"skills/{slug}/SKILL.md", f"Promote skill to active: {slug}")
+        return True
+
+    def deprecate(self, slug: str) -> bool:
+        """Mark a skill as deprecated."""
+        path = self.root / slug / "SKILL.md"
+        if not path.exists():
+            return False
+        original = path.read_text(encoding="utf-8")
+        updated = re.sub(
+            r"^(status:\s*)\S+\s*$", r"\g<1>deprecated", original, flags=re.MULTILINE
+        )
+        if updated == original:
+            return False
+        path.write_text(updated, encoding="utf-8")
+        _git_add_commit(self.root.parent, f"skills/{slug}/SKILL.md", f"Deprecate skill: {slug}")
+        return True
+
+
+def _git_add_commit(git_root: Path, rel_path: str, message: str) -> None:
+    subprocess.run(["git", "add", "--", rel_path], cwd=git_root, check=False)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=git_root, check=False)
 
 
 def _parse_skill(slug: str, text: str) -> Skill | None:

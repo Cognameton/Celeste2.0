@@ -537,8 +537,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                         logging.info("Heartbeat skill proposal rate-limited: %s", slug)
                         continue
                     try:
-                        from datetime import datetime as _dt, timezone as _tz
-                        stamp = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        stamp = _now()
                         content = build_skill_content(
                             name=str(proposal.get("name", slug)).strip(),
                             description=str(proposal.get("description", "")).strip(),
@@ -546,9 +545,8 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                             status="draft",
                             note=f"Proposed by heartbeat on {stamp}. Review and activate when ready.",
                         )
-                        self.self_state.write_skill(slug, content,
-                                                    message=f"Heartbeat proposes skill: {slug}")
-                        self.skills = SkillsStore(self.self_state.root / "skills")
+                        self.skills.create(slug, content,
+                                           message=f"Heartbeat proposes skill: {slug}")
                         edit_log[skill_last_key] = _now()
                         self._save_edit_log(edit_log)
                         skill_rate_ok = False  # one proposal per tick
