@@ -22,6 +22,7 @@ from project_store import ProjectStore
 from learnings_store import LearningsStore
 from user_model import UserModel
 from executor import Executor
+from performance_store import PerformanceStore
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
 from tts import TTSManager
@@ -44,6 +45,29 @@ _CORRECTION_RE = re.compile(
 
 def _is_correction(msg: str) -> bool:
     return bool(_CORRECTION_RE.search(msg[:400]))
+
+
+_SUCCESS_RE = re.compile(
+    r"\b(perfect|exactly\s+right|that'?s\s+(right|correct|it|perfect)|"
+    r"that\s+worked|it\s+worked|worked\s+perfectly|nailed\s+it|spot\s+on|"
+    r"exactly\s+what\s+I\s+(needed|wanted)|you('?re|\s+are)\s+(right|correct)|"
+    r"got\s+it\s*[,.]?\s*thanks|thank\s+you\s*[,.]?\s*that'?s?\s+(right|correct|perfect))\b",
+    re.IGNORECASE,
+)
+_PARTIAL_RE = re.compile(
+    r"\b(almost|close\s+but|not\s+quite|nearly\s+(right|there)|"
+    r"mostly\s+(right|correct)|partially\s+(right|correct)|"
+    r"that'?s\s+part(ly|\s+of\s+it)|on\s+the\s+right\s+track)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_success(msg: str) -> bool:
+    return bool(_SUCCESS_RE.search(msg[:400]))
+
+
+def _is_partial(msg: str) -> bool:
+    return bool(_PARTIAL_RE.search(msg[:400]))
 
 
 _MAX_REACT_ROUNDS = 6
@@ -175,6 +199,10 @@ class Agent:
 
         # Executor — sandboxed tool runner for the ReAct loop
         self.executor = Executor(working_dir=Path(cfg.data_dir) if getattr(cfg, "data_dir", None) else None)
+
+        # Performance tracking — outcome feedback loop
+        self.performance = PerformanceStore(self.self_state.root / "performance")
+        self._last_active_skills: list[str] = []
 
         # Context compressor — summarizes old turns for long-session coherence
         comp_cfg = dict(getattr(cfg, "context_compression", {}) or {})
@@ -1224,6 +1252,29 @@ class Agent:
             self._in_chat = False
 
     def _respond_impl(self, user: str, token_cb: Callable[[str], None] | None = None) -> Tuple[str, Optional[str], Optional[str]]:
+        # Outcome detection — attribute feedback in this message to the previous turn
+        if self._last_active_skills:
+            outcome: Optional[float] = None
+            if _is_correction(user):
+                outcome = 0.0
+            elif _is_partial(user):
+                outcome = 0.5
+            elif _is_success(user):
+                outcome = 1.0
+            if outcome is not None:
+                prev_answer = self._recent_turns[-1]["content"] if self._recent_turns else ""
+                self.performance.record(
+                    outcome=outcome,
+                    active_skill_slugs=self._last_active_skills,
+                    user_snippet=user[:200],
+                    answer_snippet=prev_answer[:200],
+                )
+                for slug in self._last_active_skills:
+                    try:
+                        self.skills.update_confidence(slug, outcome)
+                    except Exception:
+                        logging.exception("Failed to update confidence for skill: %s", slug)
+
         # Compress old turns before building the prompt
         if self.compressor is not None and self.compressor.should_compress(self._recent_turns):
             self._recent_turns = self.compressor.compress(self._recent_turns)
@@ -1827,5 +1878,11 @@ Assistant:"""
             on_correction=self._on_reflection_correction,
             on_skill_draft=self._on_reflection_skill_draft,
         )
+
+        # Snapshot active skills so next turn can attribute outcome feedback to this turn
+        try:
+            self._last_active_skills = [s.slug for s in self.skills.load() if s.status == "active"]
+        except Exception:
+            self._last_active_skills = []
 
         return answer, None, None
