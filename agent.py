@@ -19,6 +19,7 @@ from skills_store import SkillsStore, build_skill_content
 from wants import WantsStore
 from project_store import ProjectStore
 from learnings_store import LearningsStore
+from user_model import UserModel
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
 from tts import TTSManager
@@ -116,6 +117,7 @@ class Agent:
         self.wants = WantsStore(self.self_state.root / "wants")
         self.projects = ProjectStore(self.self_state.root / "projects")
         self.learnings = LearningsStore(self.self_state.root / "learnings")
+        self.user_model = UserModel(self.self_state)
 
         # Heartbeat — idle thinking loop
         self._in_chat = False
@@ -131,6 +133,7 @@ class Agent:
             llm=self.llm,
             self_state=self.self_state,
             wants=self.wants,
+            user_model=self.user_model,
             config=hb_cfg,
             is_busy=lambda: self._in_chat,
             last_user_activity_ts=lambda: self._last_user_ts,
@@ -210,6 +213,7 @@ class Agent:
 
     def _on_reflection_correction(self, content: str) -> None:
         self.learnings.append("correction", content, trigger="user-correction")
+        self.user_model.log_correction(content)
         logging.info("Reflector: correction captured")
 
     def _on_reflection_skill_draft(

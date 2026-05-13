@@ -27,11 +27,13 @@ from typing import Any, Callable
 
 from self_state import SelfState
 from skills_store import SkillsStore, build_skill_content
+from user_model import UserModel, WRITABLE_SECTIONS
 from wants import WantsStore
 
 ALLOWED_SELF_EDIT_FILES = frozenset({"AGENTS.md", "USER.md"})
 _EDIT_COOLDOWN_S = 6 * 3600        # one self-edit per file per 6 hours
 _SKILL_PROPOSAL_COOLDOWN_S = 24 * 3600  # one new skill proposal per 24 hours
+_USER_MODEL_COOLDOWN_S = 2 * 3600  # one user model update per section per 2 hours
 _MIN_REASON_LEN = 20               # reason must be a real sentence, not a label
 _MAX_BODY_LEN = 800                # cap body to prevent wholesale rewrites
 _MAX_SKILL_DESC_LEN = 200          # skill description must be concise
@@ -65,6 +67,7 @@ class TickResult:
     wants_abandoned: list[dict[str, Any]] = field(default_factory=list)
     self_edits: list[dict[str, Any]] = field(default_factory=list)
     skills_proposed: list[dict[str, Any]] = field(default_factory=list)
+    user_model_updates: list[dict[str, Any]] = field(default_factory=list)
     parse_error: str | None = None
     raw: str = ""
 
@@ -78,6 +81,7 @@ class Heartbeat:
         llm: Any,
         self_state: SelfState,
         wants: WantsStore,
+        user_model: UserModel,
         config: HeartbeatConfig,
         is_busy: Callable[[], bool],
         last_user_activity_ts: Callable[[], float],
@@ -87,6 +91,7 @@ class Heartbeat:
         self.self_state = self_state
         self.skills = SkillsStore(self_state.root / "skills")
         self.wants = wants
+        self.user_model = user_model
         self.config = config
 
         self._is_busy = is_busy
@@ -245,6 +250,8 @@ Self-edits (AGENTS.md or USER.md) are rare. Only propose one if you have a concr
 
 Skill proposals are rarer still — only when you notice a clear, recurring capability gap not covered by any existing skill. Proposed skills are created as drafts for operator review. Leave empty in almost all ticks.
 
+User model updates target specific structured sections of USER.md (Expertise, Inferred Goals, Working preferences, Things I'm still figuring out about him). Only propose when you have observed something concrete and durable about the operator from the recent turns — not speculation. Each update upserts a named entry in that section. Leave empty if nothing concrete was observed.
+
 Output only valid JSON in exactly this shape, no other text:
 {{
   "private_thought": "string — what you are noticing or considering",
@@ -269,6 +276,13 @@ Output only valid JSON in exactly this shape, no other text:
       "description": "one sentence, under 200 chars",
       "when_to_use": "brief condition",
       "reason": "concrete reason referencing a recurring pattern in recent turns"
+    }}
+  ],
+  "user_model_updates": [
+    {{
+      "section": "Expertise or Inferred Goals or Working preferences or Things I'm still figuring out about him",
+      "key": "short identifying key (e.g. 'Python' or 'main-project')",
+      "value": "the observed value — concrete, one line"
     }}
   ]
 }}
@@ -314,7 +328,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
         except (TypeError, ValueError):
             result.importance = 0
         for key in ("wants_added", "wants_advanced", "wants_resolved", "wants_abandoned",
-                    "self_edits", "skills_proposed"):
+                    "self_edits", "skills_proposed", "user_model_updates"):
             value = data.get(key) or []
             if isinstance(value, list):
                 setattr(result, key, [v for v in value if isinstance(v, dict)])
@@ -555,6 +569,29 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                     except Exception as exc:
                         entry["skills_proposed_rejected"].append({"slug": slug, "reason": f"write error: {exc}"})
                         logging.exception("Heartbeat skill proposal write failed: %s", slug)
+
+        if result.user_model_updates:
+            edit_log = self._load_edit_log()
+            for update in result.user_model_updates:
+                section = str(update.get("section", "")).strip()
+                key = str(update.get("key", "")).strip()
+                value = str(update.get("value", "")).strip()
+                if not section or not key or not value:
+                    continue
+                if section not in WRITABLE_SECTIONS:
+                    logging.info("Heartbeat user model update rejected: section '%s' not writable", section)
+                    continue
+                rate_key = f"__user_model_{section}__"
+                if not self._rate_limit_ok_with_cooldown(rate_key, edit_log, _USER_MODEL_COOLDOWN_S):
+                    logging.info("Heartbeat user model update rate-limited: %s / %s", section, key)
+                    continue
+                try:
+                    if self.user_model.upsert_entry(section, key, value):
+                        edit_log[rate_key] = _now()
+                        self._save_edit_log(edit_log)
+                        logging.info("Heartbeat user model updated: %s / %s", section, key)
+                except Exception:
+                    logging.exception("Heartbeat user model update failed: %s / %s", section, key)
 
         with self.journal_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
