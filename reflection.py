@@ -25,26 +25,37 @@ TEACHER_PROMPT = """\
 User: {user}
 Assistant: {answer}
 
-[Task]
-Evaluate this exchange against the rulebook. Work through three stages:
+[Context]
+User is correcting the assistant: {is_correction}
 
-1. Did the assistant violate any existing rule? Note which one.
-2. Is there a new behavioral pattern worth capturing?
-   - Can it fold into an existing rule by rewriting that rule more broadly?
-     (preferred — keeps the rulebook lean and consolidated)
+[Task]
+Evaluate this exchange. Work through four stages:
+
+1. If the user is correcting the assistant, capture the correction (preferred over all other actions).
+2. Did the assistant violate any existing rule? Note which one.
+3. Is there a new behavioral pattern worth capturing?
+   - Can it fold into an existing rule? (preferred — keeps the rulebook lean)
    - Or is it genuinely new with no overlap?
-3. Output exactly ONE JSON object and nothing else:
+4. Is there a reusable procedural skill worth persisting (a generalizable how-to)?
+
+Output exactly ONE JSON object and nothing else:
 
 No action needed:
 {{"action": "none"}}
 
-Add a new rule (one concise sentence, no conflicts with existing rules):
+Correction captured (user clearly corrected the assistant):
+{{"action": "correction", "content": "what was wrong and what the correction was"}}
+
+Add a new rulebook rule:
 {{"action": "add", "rule": "rule text here"}}
 
 Consolidate into an existing rule (use the rule number from the Rulebook above):
 {{"action": "update", "index": N, "rule": "rewritten rule absorbing both patterns"}}
 
-Rulebook is getting too large to manage effectively:
+Reusable skill identified (generalizable procedural pattern):
+{{"action": "skill_draft", "name": "short name", "description": "one sentence", "when_to_use": "brief trigger condition", "body": "markdown body"}}
+
+Rulebook is getting too large:
 {{"action": "flag", "reason": "brief reason here"}}
 
 Output only the JSON. No preamble, no explanation.\
@@ -172,9 +183,12 @@ class Reflector:
         answer: str,
         rulebook_text: str,
         *,
+        is_correction: bool = False,
         on_add: Callable[[str], None] | None = None,
         on_update: Callable[[int, str], None] | None = None,
         on_flag: Callable[[str], None] | None = None,
+        on_correction: Callable[[str], None] | None = None,
+        on_skill_draft: Callable[[str, str, str, str], None] | None = None,
     ) -> None:
         """Fire reflection in a background daemon thread. Non-blocking."""
         if not self._enabled:
@@ -182,7 +196,14 @@ class Reflector:
         threading.Thread(
             target=self._run,
             args=(user, answer, rulebook_text),
-            kwargs={"on_add": on_add, "on_update": on_update, "on_flag": on_flag},
+            kwargs={
+                "is_correction": is_correction,
+                "on_add": on_add,
+                "on_update": on_update,
+                "on_flag": on_flag,
+                "on_correction": on_correction,
+                "on_skill_draft": on_skill_draft,
+            },
             name="celeste-reflection-worker",
             daemon=True,
         ).start()
@@ -193,9 +214,12 @@ class Reflector:
         answer: str,
         rulebook_text: str,
         *,
+        is_correction: bool = False,
         on_add: Callable[[str], None] | None = None,
         on_update: Callable[[int, str], None] | None = None,
         on_flag: Callable[[str], None] | None = None,
+        on_correction: Callable[[str], None] | None = None,
+        on_skill_draft: Callable[[str, str, str, str], None] | None = None,
     ) -> None:
         try:
             llm = self._get_teacher()
@@ -203,15 +227,20 @@ class Reflector:
                 rulebook=rulebook_text or "(no rules yet)",
                 user=(user or "").strip()[:600],
                 answer=(answer or "").strip()[:1000],
+                is_correction="yes" if is_correction else "no",
             )
-            raw = llm.generate(prompt, max_new_tokens=256).strip()
+            raw = llm.generate(prompt, max_new_tokens=384).strip()
             result = _extract_json(raw)
             if not result:
                 logging.warning("Reflector: unparseable output: %.200s", raw)
                 return
             action = str(result.get("action", "none")).strip().lower()
             logging.info("Reflector: action=%s", action)
-            if action == "add":
+            if action == "correction":
+                content = str(result.get("content", "") or "").strip()
+                if content and on_correction:
+                    on_correction(content)
+            elif action == "add":
                 rule_text = str(result.get("rule", "") or "").strip()
                 if rule_text and on_add:
                     on_add(rule_text)
@@ -220,6 +249,13 @@ class Reflector:
                 rule_text = str(result.get("rule", "") or "").strip()
                 if index > 0 and rule_text and on_update:
                     on_update(index, rule_text)
+            elif action == "skill_draft":
+                name = str(result.get("name", "") or "").strip()
+                description = str(result.get("description", "") or "").strip()
+                when_to_use = str(result.get("when_to_use", "") or "").strip()
+                body = str(result.get("body", "") or "").strip()
+                if name and on_skill_draft:
+                    on_skill_draft(name, description, when_to_use, body)
             elif action == "flag":
                 reason = str(result.get("reason", "") or "").strip()
                 if on_flag:

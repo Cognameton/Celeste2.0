@@ -15,9 +15,10 @@ from file_rag import FileRAG, FILE_RAG_INDEX_KIND_SEMANTIC, FILE_RAG_INDEX_KIND_
 from reflection import Reflector
 from playbook import Playbook
 from self_state import SelfState
-from skills_store import SkillsStore
+from skills_store import SkillsStore, build_skill_content
 from wants import WantsStore
 from project_store import ProjectStore
+from learnings_store import LearningsStore
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
 from tts import TTSManager
@@ -28,6 +29,18 @@ from graph_facts import (
 )
 
 console = Console()
+
+_CORRECTION_RE = re.compile(
+    r"\b(no[,.]?\s|nope\b|wrong\b|incorrect\b|that'?s\s+(wrong|not\s+right|incorrect)|"
+    r"don'?t\s+(do|say)\s+that|stop\s+(doing|saying)|actually[,\s]|"
+    r"you('?re|\s+are)\s+(wrong|incorrect|mistaken)|that'?s\s+not\s+(right|correct)|"
+    r"not\s+(right|correct)\b|please\s+don'?t|you\s+should(n'?t|\s+not)|you\s+shouldn'?t)",
+    re.IGNORECASE,
+)
+
+
+def _is_correction(msg: str) -> bool:
+    return bool(_CORRECTION_RE.search(msg[:400]))
 
 
 class Agent:
@@ -102,6 +115,7 @@ class Agent:
         self.skills = SkillsStore(self.self_state.root / "skills")
         self.wants = WantsStore(self.self_state.root / "wants")
         self.projects = ProjectStore(self.self_state.root / "projects")
+        self.learnings = LearningsStore(self.self_state.root / "learnings")
 
         # Heartbeat — idle thinking loop
         self._in_chat = False
@@ -193,6 +207,26 @@ class Agent:
         logging.info("Reflector flagged rulebook: %s", reason)
         if callable(getattr(self, "reflection_flag_cb", None)):
             self.reflection_flag_cb(reason)
+
+    def _on_reflection_correction(self, content: str) -> None:
+        self.learnings.append("correction", content, trigger="user-correction")
+        logging.info("Reflector: correction captured")
+
+    def _on_reflection_skill_draft(
+        self, name: str, description: str, when_to_use: str, body: str
+    ) -> None:
+        import re as _re
+        slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "skill"
+        base, i = slug, 2
+        while self.skills.exists(slug):
+            slug = f"{base}-{i}"
+            i += 1
+        content = build_skill_content(
+            name, description, when_to_use, status="draft", note="auto-proposed by reflector"
+        )
+        self.self_state.write_skill(slug, content, message=f"Skill draft: {name}")
+        self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
+        logging.info("Reflector: skill draft created: %s", slug)
 
     def build_system_prompt(self, query: str = "") -> str:
         playbook_text = self.playbook.format_for_prompt(query=query, top_k=5).strip()
@@ -1653,9 +1687,12 @@ Assistant:"""
             user,
             answer,
             rulebook_text=self.playbook.format_for_teacher(),
+            is_correction=_is_correction(user),
             on_add=self._on_reflection_add,
             on_update=self._on_reflection_update,
             on_flag=self._on_reflection_flag,
+            on_correction=self._on_reflection_correction,
+            on_skill_draft=self._on_reflection_skill_draft,
         )
 
         return answer, None, None
