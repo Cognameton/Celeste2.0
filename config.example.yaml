@@ -66,7 +66,8 @@ tts_piper_speaker: null
 tts_output_dir: null  # Legacy field; current Piper TTS uses temporary WAVs and deletes them after playback.
 tts_piper_executable: /absolute/path/to/piper
 reflection:
-  enabled: false
+  # enabled: true by default — set to false to suppress post-turn learning (development/debugging only)
+  model_path: null  # optional separate teacher model; falls back to main LLM if unset
   strength: 0.2
   tone: encouraging
   goals:

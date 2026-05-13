@@ -116,7 +116,7 @@ class Reflector:
         self._teacher_llm: Optional[LLMRunner] = None
         self._teacher_loaded = False
         reflection_cfg = dict(getattr(cfg, "reflection", {}) or {})
-        self._enabled = bool(reflection_cfg.get("enabled", False))
+        self._enabled = bool(reflection_cfg.get("enabled", True))
         self._teacher_model_path = str(reflection_cfg.get("model_path", "") or "").strip()
         self._reflection_cfg = reflection_cfg
 

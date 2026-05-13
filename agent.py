@@ -196,7 +196,7 @@ class Agent:
     def _reflection_enabled(self) -> bool:
         reflection_cfg = getattr(self.cfg, "reflection", {}) or {}
         if isinstance(reflection_cfg, dict):
-            return bool(reflection_cfg.get("enabled", False))
+            return bool(reflection_cfg.get("enabled", True))
         return False
 
     # ---------- Prompt pieces ----------
