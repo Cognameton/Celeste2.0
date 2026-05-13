@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Callable, Dict, Any, Tuple, Optional, List
 
 from rich.console import Console
@@ -20,6 +21,7 @@ from wants import WantsStore
 from project_store import ProjectStore
 from learnings_store import LearningsStore
 from user_model import UserModel
+from executor import Executor
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
 from tts import TTSManager
@@ -42,6 +44,36 @@ _CORRECTION_RE = re.compile(
 
 def _is_correction(msg: str) -> bool:
     return bool(_CORRECTION_RE.search(msg[:400]))
+
+
+_MAX_REACT_ROUNDS = 6
+_REACT_STOP = ["\nUser:", "\nSystem:", "<|endoftext|>", "</s>"]
+
+
+def _parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
+    """Extract the first TOOL_CALL: {...} from model output. Returns (tool, args) or None."""
+    idx = (text or "").find("TOOL_CALL:")
+    if idx == -1:
+        return None
+    rest = text[idx + len("TOOL_CALL:"):].strip()
+    start = rest.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(rest[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    data = json.loads(rest[start : i + 1])
+                    tool = str(data.get("tool", "")).strip()
+                    args = data.get("args", {})
+                    return (tool, args if isinstance(args, dict) else {}) if tool else None
+                except Exception:
+                    return None
+    return None
 
 
 class Agent:
@@ -140,6 +172,9 @@ class Agent:
             recent_turns=lambda n: list(self._recent_turns[-n:]),
         )
         self.heartbeat.start()
+
+        # Executor — sandboxed tool runner for the ReAct loop
+        self.executor = Executor(working_dir=Path(cfg.data_dir) if getattr(cfg, "data_dir", None) else None)
 
         # Context compressor — summarizes old turns for long-session coherence
         comp_cfg = dict(getattr(cfg, "context_compression", {}) or {})
@@ -255,6 +290,11 @@ class Agent:
             projects_block = self.projects.for_prompt().strip()
         except Exception:
             projects_block = ""
+        tools_block = ""
+        try:
+            tools_block = self.executor.for_prompt().strip()
+        except Exception:
+            tools_block = ""
 
         parts: List[str] = []
         if self_block:
@@ -265,6 +305,8 @@ class Agent:
             parts.append("[Skills]\n" + skills_block)
         if projects_block:
             parts.append("[Projects]\n" + projects_block)
+        if tools_block:
+            parts.append("[Tools]\n" + tools_block)
         preamble = (self.cfg.system_preamble or "").strip()
         if preamble:
             parts.append(preamble)
@@ -292,6 +334,82 @@ class Agent:
             self._live_guidance = ""
 
         return "\n".join([p for p in parts if p])
+
+    # ---- ReAct tool loop ----
+
+    def _call_llm_sync(
+        self,
+        messages: List[Dict[str, str]],
+        prompt: str,
+        max_new_tokens: int,
+        stop: List[str],
+        use_chat_api: bool,
+        temperature: float = 0.3,
+    ) -> str:
+        if use_chat_api:
+            return (self.llm.chat(
+                messages,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=0.9,
+                stop=stop,
+                repeat_penalty=1.12,
+                repeat_last_n=256,
+            ) or "").strip()
+        return (self.llm.generate(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=0.9,
+            stop=stop,
+            repeat_penalty=1.12,
+            repeat_last_n=256,
+        ) or "").strip()
+
+    def _react_pass(
+        self,
+        messages: List[Dict[str, str]],
+        prompt: str,
+        use_chat_api: bool,
+        max_new: int,
+        final_stop: List[str],
+    ) -> Tuple[Optional[str], bool]:
+        """Run the ReAct tool loop. Returns (answer | None, used_tools).
+
+        Returns (None, False) when no tool call appears in the first response,
+        so the caller can fall through to the normal streaming path.
+        """
+        react_msgs = list(messages)
+        tools_used = False
+
+        for _round in range(_MAX_REACT_ROUNDS):
+            raw = self._call_llm_sync(react_msgs, prompt, 512, _REACT_STOP, use_chat_api)
+            parsed = _parse_tool_call(raw)
+
+            if parsed is None:
+                if tools_used:
+                    return raw, True
+                return None, False     # no tools triggered at all
+
+            tools_used = True
+            tool_name, tool_args = parsed
+            result = self.executor.execute(tool_name, tool_args)
+            result_text = result.output if result.ok else f"[Error: {result.error}]"
+            logging.info("ReAct: tool=%s ok=%s", tool_name, result.ok)
+
+            react_msgs.append({"role": "assistant", "content": raw})
+            react_msgs.append({
+                "role": "user",
+                "content": f"[Tool: {tool_name}]\n{result_text}",
+            })
+
+        # Max rounds — force final answer
+        react_msgs.append({
+            "role": "user",
+            "content": "[Max tool steps reached. Provide your final answer based on what you have gathered so far.]",
+        })
+        answer = self._call_llm_sync(react_msgs, prompt, max_new, final_stop, use_chat_api)
+        return answer, True
 
     def _count_tokens(self, text: str) -> int:
         try:
@@ -1478,7 +1596,13 @@ Assistant:"""
         ]
 
         messages = make_messages(notes_block)
-        if token_cb is not None:
+
+        # ReAct loop — runs before streaming; short-circuits if no tool call triggered
+        react_answer, used_tools = self._react_pass(messages, prompt, use_chat_api, max_new, stop)
+        if used_tools:
+            answer = react_answer or ""
+            # Skip the normal LLM call and post-processing streaming path
+        elif token_cb is not None:
             _tokens: list[str] = []
             _stream = (
                 self.llm.chat_stream(
