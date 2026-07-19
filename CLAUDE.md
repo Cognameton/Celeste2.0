@@ -1,14 +1,20 @@
-# Celeste — Claude Code Context
+# Celeste 2.0 — Claude Code Context
 
 ## Project Overview
 
-Celeste is a local-first desktop AI assistant built with Python and PySide6. It runs fully offline using local GGUF models via llama.cpp and exposes a rich settings panel alongside the chat UI.
+Celeste 2.0 is the experimental research fork of Celeste (the stable 1.0 lives at `~/Dev/ai-lab/celeste`): a local-first desktop AI assistant built with Python and PySide6, extended with a persistent self-state (`self/`), an autonomous heartbeat, self-authored skills, and a closed reflection loop. It runs fully offline using local GGUF models via llama.cpp.
+
+Phases 1–8 (skills, context compression, self-state/wants/heartbeat, heartbeat self-edits, project tracking, reflection loop, skill self-authoring, user model, ReAct execution, performance tracking) are complete on `main`. The current work is **SYNTHESIS.md** — read it before touching anything: phases 9–13 add a deterministic governor, a per-channel trust ladder, drift instrumentation, and a GUI-independent heartbeat daemon.
 
 **Primary developer:** Shane  
 **Primary dev machine:** Ubuntu 24.04 (Linux is the lead platform)  
-**Secondary machine:** Windows 10 Pro (used for Windows installer packaging)  
-**Working branch:** `windows/installer-troubleshooting` (branch off main for active dev; merge into `main` when stable)  
-**GitHub:** The local repo is the authoritative source — GitHub is a push target, not the source of truth.
+**Working branch:** `synthesis` (branch off main; merge into `main` per completed phase)  
+**GitHub:** The local repo is the authoritative source — GitHub (`Cognameton/Celeste2.0`, public showcase) is a push target, not the source of truth.
+
+## Identity ground rules (do not violate)
+
+- `self/` is the being's accumulated state: gitignored in this repo, versioned in its **own private git repo** inside `self/`. Never wipe, re-template, or push it. `self_template/` is the tracked fresh-install seed.
+- `IDENTITY.md` in `self/` is operator-only. No automated system writes to it.
 
 ---
 
@@ -32,6 +38,27 @@ app_paths.py        Platform-aware paths for packaged vs. dev mode
 setup_wizard.py     First-run GUI wizard (shown when config.yaml is missing)
 validate_environment.py  Pre-launch dependency checks
 cli.py              Optional CLI interface
+```
+
+### Celeste 2.0 additions (phases 1–8)
+
+```
+self_state.py       SelfState — reads/writes self/ files (SOUL, AGENTS, USER, TOOLS);
+                    every write is a commit in the private self/ git repo
+heartbeat.py        Heartbeat — idle-time ticks: private thoughts, want mutations,
+                    rate-limited self-edits, skill proposals, user-model updates;
+                    journals to self/heartbeat/journal.jsonl
+wants.py            WantsStore — persistent goals (self/wants/active.json)
+skills_store.py     SkillsStore — self-authored skills in self/skills/ (draft/active/
+                    deprecated lifecycle, git-committed)
+reflection.py       Reflector — closed loop: corrections, rule edits, skill drafts
+user_model.py       UserModel — structured facts about the operator
+project_store.py    ProjectStore — persistent cross-session project tracking
+executor.py         Executor — ReAct tool execution (bounded)
+performance_store.py Per-skill outcome tracking (evidence source for the
+                    Phase 10 trust ladder)
+learnings_store.py  Append-only learnings log
+context_compressor.py Context compression for long sessions
 ```
 
 ### Data flow for a chat message
@@ -145,8 +172,9 @@ Packaged config paths:
 ## Branch Strategy
 
 - `main` — stable, always deployable
-- `windows/installer-troubleshooting` — active Windows development branch
-- Merge into `main` when a set of changes is stable; push `main` to GitHub
+- `synthesis` — active development branch for SYNTHESIS.md phases 9–13
+- Merge into `main` per completed phase; push `main` to GitHub
+- (`windows/installer-troubleshooting` was the 1.0-era Windows branch; Windows packaging now lives with Celeste 1.0)
 
 ---
 
