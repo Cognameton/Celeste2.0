@@ -86,6 +86,7 @@ class Heartbeat:
         is_busy: Callable[[], bool],
         last_user_activity_ts: Callable[[], float],
         recent_turns: Callable[[int], list[dict[str, str]]],
+        on_event: Callable[[str], None] | None = None,
     ):
         self.llm = llm
         self.self_state = self_state
@@ -97,6 +98,7 @@ class Heartbeat:
         self._is_busy = is_busy
         self._last_user_ts = last_user_activity_ts
         self._recent_turns = recent_turns
+        self._on_event = on_event
 
         self.journal_path = config.journal_path or (self_state.root / "heartbeat" / "journal.jsonl")
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +172,13 @@ class Heartbeat:
             "running": self._thread is not None and self._thread.is_alive(),
         }
 
+    def _emit(self, msg: str) -> None:
+        if callable(self._on_event):
+            try:
+                self._on_event(msg)
+            except Exception:
+                pass
+
     # ---- main loop ----
 
     def _loop(self) -> None:
@@ -197,6 +206,7 @@ class Heartbeat:
     # ---- tick ----
 
     def _run_tick(self) -> None:
+        self._emit("Heartbeat • thinking…")
         turns = self._recent_turns(4)
         recent_text = " ".join(
             t.get("content", "") for t in turns
@@ -467,6 +477,9 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             "parse_error": result.parse_error,
         }
 
+        if result.private_thought:
+            self._emit(f"Heartbeat • thought (importance {result.importance}): {result.private_thought[:120]}")
+
         for spec in result.wants_added:
             text = str(spec.get("text", "")).strip()
             if not text:
@@ -477,6 +490,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                 priority = 3
             want = self.wants.add(text, origin="self", priority=priority)
             entry["wants_added"].append({"id": want.id, "text": want.text})
+            self._emit(f"Heartbeat • want added: {want.text[:80]}")
 
         for spec in result.wants_advanced:
             wid = str(spec.get("id", "")).strip()
@@ -525,6 +539,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                         "heading": heading,
                         "reason": str(edit.get("reason", "")).strip(),
                     })
+                    self._emit(f"Heartbeat • self-edit: {filename} / {heading}")
                     logging.info("Heartbeat self-edit applied: %s / %s", filename, heading)
                 except Exception as exc:
                     entry["self_edits_rejected"].append({"file": filename, "reason": f"write error: {exc}"})
@@ -565,6 +580,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                         self._save_edit_log(edit_log)
                         skill_rate_ok = False  # one proposal per tick
                         entry["skills_proposed_applied"].append({"slug": slug})
+                        self._emit(f"Heartbeat • skill draft proposed: {slug}")
                         logging.info("Heartbeat skill proposal created (draft): %s", slug)
                     except Exception as exc:
                         entry["skills_proposed_rejected"].append({"slug": slug, "reason": f"write error: {exc}"})
@@ -589,6 +605,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                     if self.user_model.upsert_entry(section, key, value):
                         edit_log[rate_key] = _now()
                         self._save_edit_log(edit_log)
+                        self._emit(f"Heartbeat • user model: {section} / {key}")
                         logging.info("Heartbeat user model updated: %s / %s", section, key)
                 except Exception:
                     logging.exception("Heartbeat user model update failed: %s / %s", section, key)

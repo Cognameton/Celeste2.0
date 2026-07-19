@@ -163,6 +163,7 @@ class Agent:
             max_rules=int(_reflection_cfg.get("max_rules", 30)),
         )
         self.reflection_flag_cb: Callable[[str], None] | None = None
+        self.activity_cb: Callable[[str], None] | None = None
         self.tts = TTSManager(cfg)
         self._last_prompt_tokens: int = 0
 
@@ -194,6 +195,7 @@ class Agent:
             is_busy=lambda: self._in_chat,
             last_user_activity_ts=lambda: self._last_user_ts,
             recent_turns=lambda n: list(self._recent_turns[-n:]),
+            on_event=self._emit_activity,
         )
         self.heartbeat.start()
 
@@ -256,6 +258,13 @@ class Agent:
         self.cfg.memory = memory_cfg
         return self.mem.set_engram_auto_prune(enabled)
 
+    def _emit_activity(self, msg: str) -> None:
+        if callable(self.activity_cb):
+            try:
+                self.activity_cb(msg)
+            except Exception:
+                pass
+
     def _reflection_enabled(self) -> bool:
         reflection_cfg = getattr(self.cfg, "reflection", {}) or {}
         if isinstance(reflection_cfg, dict):
@@ -265,18 +274,22 @@ class Agent:
     # ---------- Prompt pieces ----------
     def _on_reflection_add(self, text: str) -> None:
         self.playbook.add_rule(text, source="teacher")
+        self._emit_activity(f"Reflection • rule added: {text[:80]}")
 
     def _on_reflection_update(self, index: int, text: str) -> None:
         self.playbook.update_by_index(index, text)
+        self._emit_activity(f"Reflection • rule updated (#{index}): {text[:60]}")
 
     def _on_reflection_flag(self, reason: str) -> None:
         logging.info("Reflector flagged rulebook: %s", reason)
+        self._emit_activity(f"Reflection • rulebook flagged: {reason[:80]}")
         if callable(getattr(self, "reflection_flag_cb", None)):
             self.reflection_flag_cb(reason)
 
     def _on_reflection_correction(self, content: str) -> None:
         self.learnings.append("correction", content, trigger="user-correction")
         self.user_model.log_correction(content)
+        self._emit_activity(f"Reflection • correction captured: {content[:80]}")
         logging.info("Reflector: correction captured")
 
     def _on_reflection_skill_draft(
@@ -290,6 +303,7 @@ class Agent:
                 self.learnings.append(
                     "skill_draft", f"{name}: promoted to active", trigger="reflector-confirm"
                 )
+                self._emit_activity(f"Reflection • skill promoted to active: {slug}")
                 logging.info("Reflector: skill draft promoted to active: %s", slug)
                 return
         if not self.skills.exists(slug):
@@ -298,6 +312,7 @@ class Agent:
             )
             self.skills.create(slug, content, message=f"Skill draft: {name}")
             self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
+            self._emit_activity(f"Reflection • skill draft created: {slug}")
             logging.info("Reflector: skill draft created: %s", slug)
 
     def build_system_prompt(self, query: str = "") -> str:
@@ -423,6 +438,7 @@ class Agent:
             tool_name, tool_args = parsed
             result = self.executor.execute(tool_name, tool_args)
             result_text = result.output if result.ok else f"[Error: {result.error}]"
+            self._emit_activity(f"ReAct • tool: {tool_name} → {'ok' if result.ok else 'error'}")
             logging.info("ReAct: tool=%s ok=%s", tool_name, result.ok)
 
             react_msgs.append({"role": "assistant", "content": raw})

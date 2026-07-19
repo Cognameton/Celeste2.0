@@ -125,6 +125,16 @@ def _walk_model_files(root: str):
             yield os.path.join(dirpath, filename)
 
 
+def discover_models_in_dir(directory: str, limit: int = 64) -> List[str]:
+    """Return all GGUF model files found under directory (recursive)."""
+    found: List[str] = []
+    for path in _walk_model_files(directory):
+        found.append(path)
+        if len(found) >= limit:
+            break
+    return found
+
+
 def discover_local_models(limit: int = 8) -> List[str]:
     found: List[str] = []
     seen = set()

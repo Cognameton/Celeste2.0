@@ -14,6 +14,7 @@ class CelesteService:
         self.cfg: AgentConfig = load_config(self.config_path)
         self.agent: Agent | None = None
         self._reflection_flag_cb: Any | None = None
+        self._activity_cb: Any | None = None
 
     def start(self, status_cb: Callable[[str], None] | None = None) -> AgentConfig:
         self.reload(status_cb=status_cb)
@@ -41,6 +42,8 @@ class CelesteService:
         self.agent = Agent(self.cfg, status_cb=status_cb)
         if self._reflection_flag_cb is not None:
             self.agent.reflection_flag_cb = self._reflection_flag_cb
+        if self._activity_cb is not None:
+            self.agent.activity_cb = self._activity_cb
         return self.cfg
 
     def chat(self, message: str, token_cb: Callable[[str], None] | None = None) -> tuple[str, str | None, str | None]:
@@ -65,6 +68,11 @@ class CelesteService:
         self._reflection_flag_cb = cb
         if self.agent is not None:
             self.agent.reflection_flag_cb = cb
+
+    def set_activity_cb(self, cb: Any) -> None:
+        self._activity_cb = cb
+        if self.agent is not None:
+            self.agent.activity_cb = cb
 
     def get_rulebook(self) -> list[dict[str, Any]]:
         if self.agent is None:

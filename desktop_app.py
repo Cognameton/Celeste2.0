@@ -10,6 +10,7 @@ import sys
 import threading
 import traceback
 from collections import deque
+from datetime import datetime
 
 try:
     from PySide6.QtCore import QObject, QMetaObject, QThread, QTimer, Qt, Signal, Slot
@@ -34,6 +35,7 @@ try:
         QProgressDialog,
         QScrollArea,
         QSpinBox,
+        QSplitter,
         QTextBrowser,
         QVBoxLayout,
         QWidget,
@@ -47,6 +49,7 @@ except ImportError as exc:  # pragma: no cover - runtime dependency
 from app_service import CelesteService
 from config_types import AgentConfig
 from app_paths import default_config_path, resource_path
+from model_runner import discover_models_in_dir
 
 
 _LOG_BUFFER: deque[str] = deque(maxlen=1500)
@@ -301,6 +304,7 @@ class ServiceWorker(QObject):
     status = Signal(str)
     progress = Signal(int, str)
     rulebook_flagged = Signal(str)
+    agent_event = Signal(str)
 
     def __init__(self, config_path: str):
         super().__init__()
@@ -317,6 +321,7 @@ class ServiceWorker(QObject):
             self.status.emit("Starting Celeste backend...")
             cfg = self.service.start(status_cb=self.status.emit)
             self.service.set_reflection_flag_cb(lambda reason: self.rulebook_flagged.emit(reason))
+            self.service.set_activity_cb(lambda msg: self.agent_event.emit(msg))
             self.initialized.emit(cfg)
             self.status.emit("Celeste ready.")
         except Exception as exc:
@@ -421,6 +426,7 @@ class ServiceWorker(QObject):
                 logging.info("Worker calling service.reload() from Python thread.")
                 cfg = self.service.reload(data, persist=persist, status_cb=self.status.emit)
                 self.service.set_reflection_flag_cb(lambda reason: self.rulebook_flagged.emit(reason))
+                self.service.set_activity_cb(lambda msg: self.agent_event.emit(msg))
                 logging.info("Worker service.reload() returned.")
                 self.reloaded.emit(cfg)
                 self.models_ready.emit(self.service.available_models())
@@ -604,18 +610,37 @@ class CelesteWindow(QMainWindow):
         icon_path = resource_path("assets", "celeste_icon.png")
         if os.path.isfile(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        self.resize(1280, 820)
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            self.resize(min(1280, int(avail.width() * 0.95)), min(820, int(avail.height() * 0.92)))
+        else:
+            self.resize(1280, 820)
 
         root = QWidget()
-        layout = QHBoxLayout(root)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(18)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(18, 18, 18, 18)
+        root_layout.setSpacing(0)
+
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.setHandleWidth(8)
+        self._splitter.setChildrenCollapsible(False)
+        root_layout.addWidget(self._splitter)
 
         settings_card = QFrame()
         settings_card.setObjectName("settingsCard")
-        settings_card.setMinimumWidth(120)
-        settings_card.setMaximumWidth(420)
-        settings_layout = QVBoxLayout(settings_card)
+        settings_card.setMinimumWidth(220)
+        _settings_outer = QVBoxLayout(settings_card)
+        _settings_outer.setContentsMargins(0, 0, 0, 0)
+        _settings_outer.setSpacing(0)
+        _settings_scroll = QScrollArea()
+        _settings_scroll.setWidgetResizable(True)
+        _settings_scroll.setFrameShape(QFrame.NoFrame)
+        _settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        _settings_outer.addWidget(_settings_scroll)
+        _settings_inner = QWidget()
+        _settings_scroll.setWidget(_settings_inner)
+        settings_layout = QVBoxLayout(_settings_inner)
         settings_layout.setContentsMargins(14, 14, 14, 14)
         settings_layout.setSpacing(10)
 
@@ -639,7 +664,17 @@ class CelesteWindow(QMainWindow):
         self.model_combo.setEditable(True)
         self.model_combo.setInsertPolicy(QComboBox.NoInsert)
         self.model_combo.setMinimumHeight(32)
-        form.addRow("LLM Model", self.model_combo)
+        model_row = QWidget()
+        model_row_layout = QHBoxLayout(model_row)
+        model_row_layout.setContentsMargins(0, 0, 0, 0)
+        model_row_layout.setSpacing(6)
+        model_row_layout.addWidget(self.model_combo, 1)
+        self.model_dir_browse = QPushButton("Browse…")
+        self.model_dir_browse.setFixedWidth(80)
+        self.model_dir_browse.setToolTip("Pick a directory to scan for GGUF models")
+        self.model_dir_browse.clicked.connect(self._browse_model_dir)
+        model_row_layout.addWidget(self.model_dir_browse)
+        form.addRow("LLM Model", model_row)
 
         self.tts_toggle = QCheckBox("Enable Piper speech")
         form.addRow("Speech", self.tts_toggle)
@@ -784,6 +819,27 @@ class CelesteWindow(QMainWindow):
         rag_buttons.setColumnStretch(1, 1)
         settings_layout.addLayout(rag_buttons)
 
+        activity_header = QHBoxLayout()
+        activity_title = QLabel("Agent Activity")
+        activity_title.setObjectName("panelTitle")
+        activity_header.addWidget(activity_title, 1)
+        self.activity_clear_button = QPushButton("Clear")
+        self.activity_clear_button.setFixedWidth(52)
+        self.activity_clear_button.setFixedHeight(22)
+        activity_header.addWidget(self.activity_clear_button)
+        settings_layout.addLayout(activity_header)
+
+        self.activity_log = QPlainTextEdit()
+        self.activity_log.setReadOnly(True)
+        self.activity_log.setMaximumHeight(130)
+        self.activity_log.setMinimumHeight(80)
+        self.activity_log.document().setMaximumBlockCount(150)
+        self.activity_log.setPlaceholderText("Heartbeat, reflection, and tool events appear here…")
+        self.activity_log.setStyleSheet(
+            "QPlainTextEdit { background: #0c1116; color: #7dc8a4; border: 1px solid #1e2d3a; border-radius: 6px; }"
+        )
+        settings_layout.addWidget(self.activity_log)
+
         self.status_label = QLabel("Starting...")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
@@ -881,10 +937,11 @@ class CelesteWindow(QMainWindow):
         token_row.addWidget(self.token_bar, 1)
         chat_layout.addLayout(token_row)
 
-        layout.addWidget(settings_card, 0)
-        layout.addWidget(chat_card, 1)
-        layout.setStretch(0, 0)
-        layout.setStretch(1, 1)
+        self._splitter.addWidget(settings_card)
+        self._splitter.addWidget(chat_card)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([380, 900])
         self.setCentralWidget(root)
 
         self.deep_index_dialog = QProgressDialog("Building deep library index...", "Force Shutdown", 0, 100, self)
@@ -899,6 +956,7 @@ class CelesteWindow(QMainWindow):
         self.chat_view.setFont(mono)
         self.input_box.setFont(mono)
         self.stream_preview.setFont(mono)
+        self.activity_log.setFont(QFont("DejaVu Sans Mono", 9))
 
         self.log_dialog = LiveLogDialog(self)
         self.log_dialog.setWindowTitle("Celeste Live Log")
@@ -916,6 +974,7 @@ class CelesteWindow(QMainWindow):
         self.log_view.setFont(mono)
         dialog_layout.addWidget(self.log_view)
 
+        self.activity_clear_button.clicked.connect(self.activity_log.clear)
         self.reload_button.clicked.connect(self._apply_settings)
         self.refresh_models_button.clicked.connect(lambda: self.load_models_requested.emit())
         self.live_log_button.toggled.connect(self._toggle_live_log)
@@ -946,6 +1005,12 @@ class CelesteWindow(QMainWindow):
             background: #162029;
             border: 1px solid #274050;
             border-radius: 16px;
+        }
+        QSplitter::handle {
+            background: #1e2d3a;
+        }
+        QSplitter::handle:hover {
+            background: #2e4a5e;
         }
         QLabel#panelTitle {
             font-size: 18px;
@@ -1019,6 +1084,7 @@ class CelesteWindow(QMainWindow):
         self.worker.status.connect(self._set_status)
         self.worker.progress.connect(self._on_progress)
         self.worker.rulebook_flagged.connect(self._on_rulebook_flagged)
+        self.worker.agent_event.connect(self._on_agent_event)
 
         self.rulebook_button.clicked.connect(self._open_rulebook)
         self.persona_button.clicked.connect(self._open_persona)
@@ -1256,6 +1322,14 @@ class CelesteWindow(QMainWindow):
         QMessageBox.critical(self, "Celeste Error", message)
 
     @Slot(str)
+    def _on_agent_event(self, msg: str) -> None:
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.activity_log.appendPlainText(f"[{ts}] {msg}")
+        # Keep scrolled to bottom
+        sb = self.activity_log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    @Slot(str)
     def _on_rulebook_flagged(self, reason: str) -> None:
         self._append_system(
             f"Rulebook: {reason} — click \u2018View Rulebook\u2019 to review."
@@ -1324,6 +1398,18 @@ class CelesteWindow(QMainWindow):
                 self.deep_index_status_label.setText("Deep index: not built — use Build Deep Index")
         except Exception:
             pass
+
+    def _browse_model_dir(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Model Directory", os.path.expanduser("~")
+        )
+        if not directory:
+            return
+        models = discover_models_in_dir(directory)
+        if not models:
+            QMessageBox.information(self, "No Models Found", f"No GGUF models found in:\n{directory}")
+            return
+        self._on_models_ready(models)
 
     def _browse_piper_voice(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
