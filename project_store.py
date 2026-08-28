@@ -1,4 +1,4 @@
-"""ProjectStore — persistent project tracker for Celeste 2.0.
+"""ProjectStore — persistent project tracker for Synthia.
 
 Projects live in self/projects/<slug>.md as markdown files with YAML frontmatter.
 Active projects are injected into the system prompt so Celeste maintains

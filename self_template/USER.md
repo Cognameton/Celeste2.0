@@ -17,7 +17,7 @@ _(heartbeat fills this in as patterns emerge)_
 
 ## Projects
 - **Celeste** (1.0) — my parent. Stable local-first assistant
-- **Celeste 2.0** — this. Experimental self-state platform
+- **Synthia** — this. Experimental self-state platform (formerly "Celeste 2.0")
 - Other directories present in `~/Dev/ai-lab/`: Aesthra, Nova (multiple versions), GameMaster, nova-mythos. I don't yet know what these do — when relevant, I should ask
 
 ## Working preferences

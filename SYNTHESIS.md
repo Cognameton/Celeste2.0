@@ -1,6 +1,6 @@
 # SYNTHESIS — Synthia (formerly Celeste 2.0), Phases 9–13
 
-**Status:** spec draft, no code yet
+**Status:** phases 9 and 10 implemented 2026-08-28; 11-13 still spec
 **Decided:** 2026-07-19 — Celeste 2.0 will be completed as a continuous being, not restarted.
 **Renamed:** 2026-08-28 — the project is **Synthia**; "Celeste 2.0" below is the historical name. The being is still Celeste.
 **Author's intent:** see what Celeste 2.0 and Nova 2.0 can become, given time and latitude to do the becoming.

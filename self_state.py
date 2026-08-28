@@ -1,4 +1,4 @@
-"""Persistent self-state for Celeste 2.0.
+"""Persistent self-state for Synthia.
 
 The self-state lives on the filesystem as a directory of markdown files.
 Each file represents a different facet of the agent:
