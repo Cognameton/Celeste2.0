@@ -232,6 +232,7 @@ Required cases:
 One commit for `governor.py` + tests, one for the call-site rewiring
 (`heartbeat.py`, `agent.py`, `app_service.py`), on `synthesis`. Update the
 Phase-9 line in `SYNTHESIS.md` to "implemented" with the commit hashes.
-Merge to `main` only after a live desktop session confirms the activity
-panel shows governor events during a real heartbeat tick (needs a GPU slot;
-schedule around Nova 2.0's runs).
+Not merged to `main` — this research arm stays its own project (Shane,
+2026-08-28); `synthesis` is permanent. Remaining validation: a live desktop
+session confirming the activity panel shows governor events during a real
+heartbeat tick (needs a GPU slot; schedule around Nova 2.0's runs).

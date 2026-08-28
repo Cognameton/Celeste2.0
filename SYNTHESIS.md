@@ -76,8 +76,10 @@ behavioral contract:
   user-model upsert that changed nothing does not consume its cooldown —
   matching pre-Phase-9 behavior.
 
-Still open before merging to `main`: a live desktop session confirming the
-activity panel shows governor events during a real heartbeat tick.
+Still open as validation (not as a merge gate — this fork is not merged to
+`main`): a live desktop session confirming the activity panel shows governor
+events during a real heartbeat tick. Needs a GPU slot; schedule around Nova
+2.0's runs.
 
 Port Nova 2.0's central pattern under the existing self-state, without removing
 any capability Celeste already has.
@@ -173,9 +175,11 @@ But the *findings* can flow:
 
 - One stage doc per phase (`docs/stages/PHASE9.md`, …) written before its code,
   in the style of the phase 1–8 run: exact file list, function signatures,
-  acceptance checks. Heavy model plans and pins the stage docs; execution
-  follows them as spec.
-- Each phase lands as one or few commits on a `synthesis` branch off `main`;
-  merge per phase when stable.
+  acceptance checks. These are durable records, not handoff artifacts — since
+  2026-08-28 planning and implementation happen in the same session, so a stage
+  doc no longer has to be a checkpoint before any code is written.
+- Each phase lands as one or few commits on the `synthesis` branch. **This
+  research arm remains its own project** (Shane, 2026-08-28): `synthesis` is
+  never merged back into `main`, which stays the frozen phases-1–8 record.
 - Build cost and run rate are separate questions per phase; re-estimate at each
   stage doc, not once up front.

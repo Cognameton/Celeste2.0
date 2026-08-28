@@ -4,11 +4,13 @@
 
 Celeste 2.0 is the experimental research fork of Celeste (the stable 1.0 lives at `~/Dev/ai-lab/celeste`): a local-first desktop AI assistant built with Python and PySide6, extended with a persistent self-state (`self/`), an autonomous heartbeat, self-authored skills, and a closed reflection loop. It runs fully offline using local GGUF models via llama.cpp.
 
-Phases 1–8 (skills, context compression, self-state/wants/heartbeat, heartbeat self-edits, project tracking, reflection loop, skill self-authoring, user model, ReAct execution, performance tracking) are complete on `main`. The current work is **SYNTHESIS.md** — read it before touching anything: phases 9–13 add a deterministic governor, a per-channel trust ladder, drift instrumentation, and a GUI-independent heartbeat daemon.
+Phases 1–8 (skills, context compression, self-state/wants/heartbeat, heartbeat self-edits, project tracking, reflection loop, skill self-authoring, user model, ReAct execution, performance tracking) are complete on `main`. The current work is **SYNTHESIS.md** — read it before touching anything: phases 9–13 add a deterministic governor, a per-channel trust ladder, drift instrumentation, and a GUI-independent heartbeat daemon. Phase 9 is implemented; see SYNTHESIS.md for its commits.
+
+**This research arm stays its own project** (Shane, 2026-08-28). `synthesis` is not merged back into `main` — not per phase, not at the end. `main` is the frozen phases-1–8 record; the continuous-being work lives and stays on `synthesis`.
 
 **Primary developer:** Shane  
 **Primary dev machine:** Ubuntu 24.04 (Linux is the lead platform)  
-**Working branch:** `synthesis` (branch off main; merge into `main` per completed phase)  
+**Working branch:** `synthesis` — permanent. Branched off `main`, never merged back (see above).  
 **GitHub:** The local repo is the authoritative source — GitHub (`Cognameton/Celeste2.0`, public showcase) is a push target, not the source of truth.
 
 ## Identity ground rules (do not violate)
@@ -171,9 +173,9 @@ Packaged config paths:
 
 ## Branch Strategy
 
-- `main` — stable, always deployable
-- `synthesis` — active development branch for SYNTHESIS.md phases 9–13
-- Merge into `main` per completed phase; push `main` to GitHub
+- `main` — frozen record of phases 1–8. Not a merge target for this research arm.
+- `synthesis` — the permanent home of SYNTHESIS.md phases 9–13. **Do not merge it into `main`** (Shane, 2026-08-28): this fork remains its own project, separate from the shipped $49 product line.
+- Phases land as commits on `synthesis`. Pushing to GitHub is a separate, explicit decision — the local repo is the source of truth.
 - (`windows/installer-troubleshooting` was the 1.0-era Windows branch; Windows packaging now lives with Celeste 1.0)
 
 ---
