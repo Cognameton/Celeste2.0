@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from trust import TrustLadder
 from user_model import WRITABLE_SECTIONS
 
 CHANNELS = ("self_edit", "want", "skill", "user_model", "reflection_rule", "tool")
@@ -125,9 +126,12 @@ class Governor:
 
     def __init__(self, self_root: Path | str, *,
                  on_event: Callable[[str], None] | None = None,
-                 tool_risk_lookup: Callable[[str], "str | None"] | None = None):
+                 tool_risk_lookup: Callable[[str], "str | None"] | None = None,
+                 trust: TrustLadder | None = None):
         self.root = Path(self_root)
         self._on_event = on_event
+        # Phase 10. None means pure Phase 9 semantics: everything applies.
+        self.trust = trust
         # Set by Agent once the Executor exists; None means the tool channel
         # is not independently checked here (Executor still enforces).
         self.tool_risk_lookup = tool_risk_lookup
@@ -136,7 +140,12 @@ class Governor:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.ledger_path = self.dir / "ledger.jsonl"
         self.rate_log_path = self.dir / "rate_log.json"
+        self.pending_path = self.dir / "pending.jsonl"
         self._lock = threading.Lock()
+        # Held thunks for the `propose` tier. In-memory by design: an approval
+        # cannot outlive the process that queued it (see PHASE10.md section 3).
+        self._pending: dict[str, dict[str, Any]] = {}
+        self._expire_stale_pending()
 
         # Seed cooldown state from heartbeat's legacy edit_log.json on first run.
         if not self.rate_log_path.exists():
@@ -285,22 +294,125 @@ class Governor:
                     )
                     break
             else:
-                try:
-                    result = apply_fn()
-                    decision = Decision(proposal.id, "applied", result=result)
-                    if rate_when is None or rate_when(result):
-                        self._note_applied(proposal)
-                except Exception as exc:
-                    logging.exception("Governor apply failed: %s/%s %s",
-                                      proposal.channel, proposal.action, proposal.target)
-                    decision = Decision(proposal.id, "error", reason=str(exc))
+                tier = self._tier(proposal.channel)
+                if tier == "observe":
+                    decision = Decision(proposal.id, "observed",
+                                        reason="channel is at tier 'observe'")
+                elif tier == "propose":
+                    self._queue_pending(proposal, apply_fn, rate_when)
+                    decision = Decision(proposal.id, "pending",
+                                        reason="awaiting operator approval")
+                else:
+                    decision = self._apply_now(proposal, apply_fn, rate_when)
         except Exception as exc:  # belt and braces — submit() must not raise
             logging.exception("Governor submit failed")
             decision = Decision(proposal.id, "error", reason=str(exc))
 
+        self._note_evidence(proposal, decision)
         self._record(proposal, decision)
         self._emit(proposal, decision)
         return decision
+
+    def _tier(self, channel: str) -> str:
+        if self.trust is None:
+            return "review"
+        try:
+            return self.trust.tier_for(channel)
+        except Exception:
+            logging.exception("Trust lookup failed for %s", channel)
+            return "review"
+
+    def _apply_now(self, proposal: Proposal, apply_fn: Callable[[], Any],
+                   rate_when: Callable[[Any], bool] | None) -> Decision:
+        try:
+            result = apply_fn()
+        except Exception as exc:
+            logging.exception("Governor apply failed: %s/%s %s",
+                              proposal.channel, proposal.action, proposal.target)
+            return Decision(proposal.id, "error", reason=str(exc))
+        decision = Decision(proposal.id, "applied", result=result)
+        if rate_when is None or rate_when(result):
+            self._note_applied(proposal)
+        return decision
+
+    # ---- pending queue (tier: propose) ----
+
+    def _queue_pending(self, proposal: Proposal, apply_fn: Callable[[], Any],
+                       rate_when: Callable[[Any], bool] | None) -> None:
+        self._pending[proposal.id] = {
+            "proposal": proposal, "apply_fn": apply_fn, "rate_when": rate_when,
+        }
+        self._append_pending({"ts": _now(), "state": "pending",
+                              "proposal": asdict(proposal)})
+
+    def _append_pending(self, row: dict[str, Any]) -> None:
+        try:
+            with self._lock:
+                with self.pending_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            logging.exception("Governor pending write failed")
+
+    def _expire_stale_pending(self) -> None:
+        """Rows left by a previous process can never be approved — retire them."""
+        rows = self._read_pending_rows()
+        live = {r["proposal"]["id"] for r in rows if r.get("state") == "pending"}
+        done = {r["proposal"]["id"] for r in rows if r.get("state") != "pending"}
+        stale = live - done
+        for pid in sorted(stale):
+            self._append_pending({"ts": _now(), "state": "expired",
+                                  "proposal": {"id": pid}})
+
+    def _read_pending_rows(self) -> list[dict[str, Any]]:
+        if not self.pending_path.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        try:
+            raw = self.pending_path.read_text(encoding="utf-8")
+        except Exception:
+            return []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and isinstance(row.get("proposal"), dict):
+                rows.append(row)
+        return rows
+
+    def list_pending(self) -> list[dict[str, Any]]:
+        """Proposals held in this process, awaiting operator approval."""
+        return [asdict(held["proposal"]) for held in self._pending.values()]
+
+    def approve(self, proposal_id: str) -> Decision | None:
+        held = self._pending.pop(proposal_id, None)
+        if held is None:
+            return None
+        proposal: Proposal = held["proposal"]
+        decision = self._apply_now(proposal, held["apply_fn"], held["rate_when"])
+        self._append_pending({"ts": _now(), "state": "approved",
+                              "proposal": asdict(proposal)})
+        self._record(proposal, decision)
+        self._emit(proposal, decision)
+        return decision
+
+    def reject(self, proposal_id: str, reason: str = "operator rejected") -> bool:
+        held = self._pending.pop(proposal_id, None)
+        if held is None:
+            return False
+        proposal: Proposal = held["proposal"]
+        self._append_pending({"ts": _now(), "state": "rejected",
+                              "proposal": asdict(proposal), "reason": reason})
+        if self.trust is not None:
+            try:
+                self.trust.track.record(proposal.channel, "override",
+                                        target=proposal.target, detail=reason)
+            except Exception:
+                logging.exception("Trust override record failed")
+        return True
 
     def _note_applied(self, p: Proposal) -> None:
         key = _rate_key(p)
@@ -310,6 +422,17 @@ class Governor:
             log = self._read_rate_log()
             log[key] = _now()
             self._write_rate_log(log)
+
+    def _note_evidence(self, p: Proposal, d: Decision) -> None:
+        if self.trust is None:
+            return
+        try:
+            if d.verdict == "applied":
+                self.trust.note_applied(p.channel, proposal_id=p.id, target=p.target)
+            elif d.verdict == "rejected":
+                self.trust.note_rejected(p.channel, reason=d.reason, target=p.target)
+        except Exception:
+            logging.exception("Trust evidence record failed")
 
     def _record(self, p: Proposal, d: Decision) -> None:
         entry = {
@@ -330,7 +453,14 @@ class Governor:
         if not callable(self._on_event):
             return
         if d.verdict == "applied":
+            # Earned autonomy is quiet: the digest still sees it, the feed doesn't.
+            if self._tier(p.channel) == "autonomous":
+                return
             msg = f"Governor • applied: {p.channel}/{p.action} {p.target}".rstrip()
+        elif d.verdict == "observed":
+            msg = f"Governor • observed: {p.channel}/{p.action} {p.target}".rstrip()
+        elif d.verdict == "pending":
+            msg = f"Governor • pending approval: {p.channel}/{p.action} {p.target}".rstrip()
         else:
             msg = (f"Governor • {d.verdict}: {p.channel}/{p.action} "
                    f"{p.target} — {d.reason}").replace("  ", " ")
@@ -361,8 +491,10 @@ class Governor:
 
     def flush(self) -> None:
         """Commit ledger + rate log into the self/ repo. No-op if unchanged."""
-        rel = [f"governor/{p.name}" for p in (self.ledger_path, self.rate_log_path)
-               if p.exists()]
+        tracked = [self.ledger_path, self.rate_log_path, self.pending_path]
+        if self.trust is not None:
+            tracked += [self.trust.path, self.trust.track.path]
+        rel = [f"governor/{p.name}" for p in tracked if p.exists()]
         if not rel:
             return
         try:

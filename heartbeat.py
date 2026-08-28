@@ -220,6 +220,11 @@ class Heartbeat:
         raw = self._call_llm(prompt)
         result = self._parse(raw)
         self._apply(result, recent_context=recent_text)
+        # Trust is re-scored on her own clock, from her own track record.
+        if self.governor.trust is not None:
+            for change in self.governor.trust.evaluate():
+                logging.info("Trust promotion: %s %s -> %s",
+                             change["channel"], change["from"], change["to"])
         self.governor.flush()
         self._last_tick_ts = time.time()
         self._tick_count += 1

@@ -22,7 +22,8 @@ from project_store import ProjectStore
 from learnings_store import LearningsStore
 from user_model import UserModel
 from executor import Executor, ToolResult
-from governor import Governor, Proposal
+from governor import CHANNELS, Governor, Proposal
+from trust import TrustLadder
 from performance_store import PerformanceStore
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
@@ -177,8 +178,15 @@ class Agent:
         self.learnings = LearningsStore(self.self_state.root / "learnings")
         self.user_model = UserModel(self.self_state)
 
-        # Governor — the single gate every agent-originated write passes through
-        self.governor = Governor(self.self_state.root, on_event=self._emit_activity)
+        # Governor — the single gate every agent-originated write passes through,
+        # and the trust ladder that decides how much latitude each channel has.
+        self.trust = TrustLadder(
+            self.self_state.root / "governor",
+            channels=CHANNELS,
+            on_event=self._emit_activity,
+        )
+        self.governor = Governor(self.self_state.root, on_event=self._emit_activity,
+                                 trust=self.trust)
 
         # Heartbeat — idle thinking loop
         self._in_chat = False

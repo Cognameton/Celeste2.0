@@ -19,10 +19,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from governor import Governor              # noqa: E402
+from governor import CHANNELS, Governor    # noqa: E402
 from heartbeat import Heartbeat, HeartbeatConfig, TickResult   # noqa: E402
 from self_state import SelfState           # noqa: E402
 from user_model import UserModel           # noqa: E402
+from trust import INITIAL_TIER, TrustLadder  # noqa: E402
 from wants import WantsStore               # noqa: E402
 
 logging.disable(logging.CRITICAL)
@@ -43,7 +44,11 @@ def build(root: Path) -> tuple[Heartbeat, Governor, SelfState]:
     self_state = SelfState.initialize(root / "self", ROOT / "self_template")
     wants = WantsStore(self_state.root / "wants")
     user_model = UserModel(self_state)
-    governor = Governor(self_state.root)
+    # Phase 10: a live ladder at its initial tiers must reproduce Phase 9
+    # behavior exactly — that is the whole neutrality claim.
+    ladder = TrustLadder(self_state.root / "governor", channels=CHANNELS)
+    assert all(v["tier"] == INITIAL_TIER for v in ladder.tiers().values())
+    governor = Governor(self_state.root, trust=ladder)
     hb = Heartbeat(
         llm=StubLLM(),
         self_state=self_state,
@@ -152,6 +157,17 @@ def main() -> int:
             {"file": "AGENTS.md", "reason": "rate-limited"}
         ], entry2["self_edits_rejected"]
 
+        # --- the ladder recorded evidence but moved nobody ---
+        ladder = governor.trust
+        assert ladder is not None
+        assert all(v["tier"] == INITIAL_TIER for v in ladder.tiers().values()), \
+            "initial tiers must not shift during a normal tick"
+        assert ladder.track.counts("self_edit", ladder._since_of("self_edit")) \
+            == {"applied": 1, "rejected": 2, "revert": 0, "drift_flag": 0,
+                "override": 0, "tier_change": 0}, \
+            ladder.track.counts("self_edit", ladder._since_of("self_edit"))
+        assert ladder.evaluate() == [], "nothing is earned on day one"
+
         # --- flush commits into the real self/ git repo ---
         governor.flush()
         import subprocess
@@ -161,6 +177,8 @@ def main() -> int:
         tracked = subprocess.run(["git", "ls-files", "governor/"], cwd=self_state.root,
                                  capture_output=True, text=True, check=False).stdout
         assert "governor/ledger.jsonl" in tracked, tracked
+        assert "governor/trust.json" in tracked, tracked
+        assert "governor/track_record.jsonl" in tracked, tracked
 
     print("behavior-neutrality probe: all assertions passed")
     return 0

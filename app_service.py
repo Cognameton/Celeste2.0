@@ -80,6 +80,58 @@ class CelesteService:
         assert self.agent is not None
         return self.agent.governor.ledger_tail(n)
 
+    # ---- trust ladder (Phase 10) ----
+
+    def get_trust_tiers(self) -> dict[str, dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.trust.tiers()
+
+    def set_trust_tier(self, channel: str, tier: str) -> bool:
+        """Operator override — the operator sits above the ladder."""
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.trust.set_tier(channel, tier, reason="operator", operator=True)
+
+    def get_track_record(self, n: int = 50, channel: str | None = None) -> list[dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.trust.track.tail(n, channel)
+
+    def list_pending(self) -> list[dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.governor.list_pending()
+
+    def approve_pending(self, proposal_id: str) -> bool:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.governor.approve(proposal_id) is not None
+
+    def reject_pending(self, proposal_id: str) -> bool:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.governor.reject(proposal_id)
+
+    def record_revert(self, channel: str, target: str = "", note: str = "") -> str:
+        """Record that the operator undid something. Demotes that channel."""
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.trust.record_revert(channel, target=target, note=note)
+
+    def evaluate_trust(self) -> list[dict[str, str]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.trust.evaluate()
+
     def get_rulebook(self) -> list[dict[str, Any]]:
         if self.agent is None:
             self.start()
