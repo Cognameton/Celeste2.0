@@ -58,7 +58,26 @@ Identity ground rules, unchanged from phase 3a:
 4. Reconcile CLAUDE.md with reality (stale branch note; add phases 1–8 and the
    `self/` architecture; add this file to the reading order).
 
-## Phase 9 — Governor (proposals, validators, ledger)
+## Phase 9 — Governor (proposals, validators, ledger) — **IMPLEMENTED 2026-08-28**
+
+Landed on `synthesis` in two commits: `3847279` (governor.py + tests) and
+`cb64ea8` (call-site rewiring in heartbeat.py, agent.py, app_service.py).
+Stage doc: `docs/stages/PHASE9.md`. Acceptance checks 1–4 and 6 pass;
+check 5 is verified against a temporary `SelfState` git repo, with the live
+`self/` repo deferred to the desktop session in Landing (needs a GPU slot).
+
+Two deliberate deviations from the stage doc, both in service of its
+behavioral contract:
+- Caller-supplied validators run *before* the built-ins, and `v_rate_limit`
+  runs last. Heartbeat checked drift before rate-limiting, so this preserves
+  which reason a doubly-invalid proposal records in the journal.
+- `Decision` carries `apply_fn`'s return value (the ReAct and wants call sites
+  need it), and `submit()` takes an optional `rate_when` predicate so a
+  user-model upsert that changed nothing does not consume its cooldown —
+  matching pre-Phase-9 behavior.
+
+Still open before merging to `main`: a live desktop session confirming the
+activity panel shows governor events during a real heartbeat tick.
 
 Port Nova 2.0's central pattern under the existing self-state, without removing
 any capability Celeste already has.
