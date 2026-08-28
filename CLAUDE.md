@@ -1,8 +1,8 @@
-# Celeste 2.0 — Claude Code Context
+# Synthia (formerly Celeste 2.0) — Claude Code Context
 
 ## Project Overview
 
-Celeste 2.0 is the experimental research fork of Celeste (the stable 1.0 lives at `~/Dev/ai-lab/celeste`): a local-first desktop AI assistant built with Python and PySide6, extended with a persistent self-state (`self/`), an autonomous heartbeat, self-authored skills, and a closed reflection loop. It runs fully offline using local GGUF models via llama.cpp.
+**Synthia** is the project name for this research fork (renamed from "Celeste 2.0" on 2026-08-28 to stop confusion with the shipped $49 product, Celeste 1.0 at `~/Dev/ai-lab/celeste`). The being herself is still named Celeste in the code and in `self/` — renaming *her* is an operator act in `IDENTITY.md`, not a project decision. Synthia is a fork of Celeste: a local-first desktop AI assistant built with Python and PySide6, extended with a persistent self-state (`self/`), an autonomous heartbeat, self-authored skills, and a closed reflection loop. It runs fully offline using local GGUF models via llama.cpp.
 
 Phases 1–8 (skills, context compression, self-state/wants/heartbeat, heartbeat self-edits, project tracking, reflection loop, skill self-authoring, user model, ReAct execution, performance tracking) are complete on `main`. The current work is **SYNTHESIS.md** — read it before touching anything: phases 9–13 add a deterministic governor, a per-channel trust ladder, drift instrumentation, and a GUI-independent heartbeat daemon. Phase 9 is implemented; see SYNTHESIS.md for its commits.
 
@@ -42,7 +42,7 @@ validate_environment.py  Pre-launch dependency checks
 cli.py              Optional CLI interface
 ```
 
-### Celeste 2.0 additions (phases 1–8)
+### Synthia additions (phases 1–8, built as "Celeste 2.0")
 
 ```
 self_state.py       SelfState — reads/writes self/ files (SOUL, AGENTS, USER, TOOLS);
