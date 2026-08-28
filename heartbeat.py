@@ -5,12 +5,18 @@ interacting, it calls the LLM with a grounded prompt and gets back a
 structured tick: a private thought, optional want mutations, an importance
 score, and optional self-edits to AGENTS.md or USER.md.
 
-Self-edits are guarded by two layers:
+Self-edits are guarded by two layers, both enforced by the Governor
+(see governor.py) since Phase 9:
   - Rate-limit: max one edit per file per 6 hours, tracked in
-    self/heartbeat/edit_log.json.
+    self/governor/rate_log.json (migrated from heartbeat/edit_log.json).
   - Drift-check: proposed edit must name a specific file in the allowed
     set, carry a non-trivial reason grounded in recent context, and stay
-    within size bounds (no wholesale rewrites).
+    within size bounds (no wholesale rewrites). The drift checks live here
+    because they need tick context; they are handed to the governor as
+    extra validators.
+
+Every write below goes through ``self.governor.submit`` and is recorded in
+self/governor/ledger.jsonl.
 """
 
 from __future__ import annotations
@@ -25,16 +31,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from governor import ALLOWED_SELF_EDIT_FILES, Governor, MIN_REASON_LEN, Proposal
 from self_state import SelfState
 from skills_store import SkillsStore, build_skill_content
-from user_model import UserModel, WRITABLE_SECTIONS
+from user_model import UserModel
 from wants import WantsStore
 
-ALLOWED_SELF_EDIT_FILES = frozenset({"AGENTS.md", "USER.md"})
-_EDIT_COOLDOWN_S = 6 * 3600        # one self-edit per file per 6 hours
-_SKILL_PROPOSAL_COOLDOWN_S = 24 * 3600  # one new skill proposal per 24 hours
-_USER_MODEL_COOLDOWN_S = 2 * 3600  # one user model update per section per 2 hours
-_MIN_REASON_LEN = 20               # reason must be a real sentence, not a label
+# Rate-limit constants and the allowed-file set now live in governor.py.
+# What stays here is drift checking, which needs the tick's context.
 _MAX_BODY_LEN = 800                # cap body to prevent wholesale rewrites
 _MAX_SKILL_DESC_LEN = 200          # skill description must be concise
 _REASON_STOPWORDS = frozenset({
@@ -82,6 +86,7 @@ class Heartbeat:
         self_state: SelfState,
         wants: WantsStore,
         user_model: UserModel,
+        governor: Governor,
         config: HeartbeatConfig,
         is_busy: Callable[[], bool],
         last_user_activity_ts: Callable[[], float],
@@ -93,6 +98,7 @@ class Heartbeat:
         self.skills = SkillsStore(self_state.root / "skills")
         self.wants = wants
         self.user_model = user_model
+        self.governor = governor
         self.config = config
 
         self._is_busy = is_busy
@@ -102,7 +108,6 @@ class Heartbeat:
 
         self.journal_path = config.journal_path or (self_state.root / "heartbeat" / "journal.jsonl")
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
-        self._edit_log_path = self.journal_path.parent / "edit_log.json"
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -215,6 +220,7 @@ class Heartbeat:
         raw = self._call_llm(prompt)
         result = self._parse(raw)
         self._apply(result, recent_context=recent_text)
+        self.governor.flush()
         self._last_tick_ts = time.time()
         self._tick_count += 1
 
@@ -362,32 +368,18 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                     return cleaned[start:i + 1]
         return None
 
-    # ---- rate-limit & drift-check ----
+    # ---- drift-check (governor extra validators) ----
 
-    def _load_edit_log(self) -> dict[str, str]:
-        if not self._edit_log_path.exists():
-            return {}
-        try:
-            return json.loads(self._edit_log_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+    def _drift_validator(self, edit: dict[str, Any], recent_context: str):
+        """Wrap _drift_check as a governor validator over this tick's context."""
+        def drift_check(_proposal) -> str | None:
+            return self._drift_check(edit, recent_context)
+        return drift_check
 
-    def _save_edit_log(self, log: dict[str, str]) -> None:
-        self._edit_log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _rate_limit_ok(self, filename: str, log: dict[str, str]) -> bool:
-        return self._rate_limit_ok_with_cooldown(filename, log, _EDIT_COOLDOWN_S)
-
-    def _rate_limit_ok_with_cooldown(self, key: str, log: dict[str, str], cooldown_s: int) -> bool:
-        last_str = log.get(key)
-        if not last_str:
-            return True
-        try:
-            last_ts = datetime.fromisoformat(last_str.replace("Z", "+00:00"))
-            elapsed = (datetime.now(timezone.utc) - last_ts).total_seconds()
-            return elapsed >= cooldown_s
-        except Exception:
-            return True
+    def _skill_drift_validator(self, proposal: dict[str, Any], recent_context: str):
+        def drift_check_skill(_proposal) -> str | None:
+            return self._drift_check_skill(proposal, recent_context)
+        return drift_check_skill
 
     def _drift_check(self, edit: dict[str, Any], recent_context: str) -> str | None:
         """Return a rejection reason string, or None if the edit passes."""
@@ -410,8 +402,8 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             return f"body too long ({len(body)} chars > {_MAX_BODY_LEN})"
 
         reason = str(edit.get("reason", "")).strip()
-        if len(reason) < _MIN_REASON_LEN:
-            return f"reason too short ({len(reason)} chars < {_MIN_REASON_LEN})"
+        if len(reason) < MIN_REASON_LEN:
+            return f"reason too short ({len(reason)} chars < {MIN_REASON_LEN})"
 
         # Reason must share at least one non-trivial word with recent context.
         reason_words = {
@@ -445,7 +437,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             return f"description too long ({len(description)} > {_MAX_SKILL_DESC_LEN})"
 
         reason = str(proposal.get("reason", "")).strip()
-        if len(reason) < _MIN_REASON_LEN:
+        if len(reason) < MIN_REASON_LEN:
             return f"reason too short ({len(reason)} chars)"
 
         reason_words = {
@@ -460,7 +452,23 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
 
     # ---- apply ----
 
+    def _create_skill_draft(self, proposal: dict[str, Any], slug: str) -> None:
+        stamp = _now()
+        content = build_skill_content(
+            name=str(proposal.get("name", slug)).strip(),
+            description=str(proposal.get("description", "")).strip(),
+            when_to_use=str(proposal.get("when_to_use", "")).strip(),
+            status="draft",
+            note=f"Proposed by heartbeat on {stamp}. Review and activate when ready.",
+        )
+        self.skills.create(slug, content, message=f"Heartbeat proposes skill: {slug}")
+
     def _apply(self, result: TickResult, recent_context: str = "") -> None:
+        """Route every proposed mutation through the governor, then journal it.
+
+        The journal entry keeps its pre-Phase-9 shape exactly; governor
+        Decisions are translated back into the same fields.
+        """
         # Always journal — even no-ops, even parse failures
         entry: dict[str, Any] = {
             "ts": _now(),
@@ -480,6 +488,10 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
         if result.private_thought:
             self._emit(f"Heartbeat • thought (importance {result.importance}): {result.private_thought[:120]}")
 
+        gov = self.governor
+
+        # ---- wants ----
+
         for spec in result.wants_added:
             text = str(spec.get("text", "")).strip()
             if not text:
@@ -488,127 +500,151 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                 priority = int(spec.get("priority", 3))
             except (TypeError, ValueError):
                 priority = 3
-            want = self.wants.add(text, origin="self", priority=priority)
-            entry["wants_added"].append({"id": want.id, "text": want.text})
-            self._emit(f"Heartbeat • want added: {want.text[:80]}")
+            proposal = Proposal.new(
+                channel="want", origin="heartbeat", action="add", target="",
+                payload={"text": text, "priority": priority},
+            )
+            decision = gov.submit(
+                proposal,
+                lambda t=text, p=priority: self.wants.add(t, origin="self", priority=p),
+            )
+            want = decision.result
+            if decision.applied and want is not None:
+                entry["wants_added"].append({"id": want.id, "text": want.text})
+                self._emit(f"Heartbeat • want added: {want.text[:80]}")
 
         for spec in result.wants_advanced:
             wid = str(spec.get("id", "")).strip()
             note = str(spec.get("note", "")).strip()
-            if wid and self.wants.advance(wid, note):
+            if not wid:
+                continue
+            proposal = Proposal.new(
+                channel="want", origin="heartbeat", action="advance", target=wid,
+                payload={"note": note},
+            )
+            decision = gov.submit(proposal, lambda i=wid, n=note: self.wants.advance(i, n))
+            if decision.applied and decision.result:
                 entry["wants_advanced"].append({"id": wid, "note": note})
 
         for spec in result.wants_resolved:
             wid = str(spec.get("id", "")).strip()
             outcome = str(spec.get("outcome", "")).strip()
-            if wid and self.wants.resolve(wid, outcome):
+            if not wid:
+                continue
+            proposal = Proposal.new(
+                channel="want", origin="heartbeat", action="resolve", target=wid,
+                payload={"outcome": outcome},
+            )
+            decision = gov.submit(proposal, lambda i=wid, o=outcome: self.wants.resolve(i, o))
+            if decision.applied and decision.result:
                 entry["wants_resolved"].append({"id": wid, "outcome": outcome})
 
         for spec in result.wants_abandoned:
             wid = str(spec.get("id", "")).strip()
             reason = str(spec.get("reason", "")).strip()
-            if wid and self.wants.abandon(wid, reason):
+            if not wid:
+                continue
+            proposal = Proposal.new(
+                channel="want", origin="heartbeat", action="abandon", target=wid,
+                payload={"reason": reason},
+            )
+            decision = gov.submit(proposal, lambda i=wid, r=reason: self.wants.abandon(i, r))
+            if decision.applied and decision.result:
                 entry["wants_abandoned"].append({"id": wid, "reason": reason})
 
-        if result.self_edits:
-            edit_log = self._load_edit_log()
-            for edit in result.self_edits:
-                filename = str(edit.get("file", "")).strip()
-                rejection = self._drift_check(edit, recent_context)
-                if rejection:
-                    entry["self_edits_rejected"].append({"file": filename, "reason": rejection})
-                    logging.info("Heartbeat self-edit rejected (%s): %s", filename, rejection)
-                    continue
-                if not self._rate_limit_ok(filename, edit_log):
-                    entry["self_edits_rejected"].append({"file": filename, "reason": "rate-limited"})
-                    logging.info("Heartbeat self-edit rate-limited: %s", filename)
-                    continue
-                try:
-                    heading = str(edit.get("heading", "")).strip()
-                    body = str(edit.get("body", "")).strip()
-                    self.self_state.append_section(
-                        filename,
-                        heading,
-                        body,
-                        message=f"Heartbeat append: {heading}",
-                    )
-                    edit_log[filename] = _now()
-                    self._save_edit_log(edit_log)
-                    entry["self_edits_applied"].append({
-                        "file": filename,
-                        "heading": heading,
-                        "reason": str(edit.get("reason", "")).strip(),
-                    })
-                    self._emit(f"Heartbeat • self-edit: {filename} / {heading}")
-                    logging.info("Heartbeat self-edit applied: %s / %s", filename, heading)
-                except Exception as exc:
-                    entry["self_edits_rejected"].append({"file": filename, "reason": f"write error: {exc}"})
-                    logging.exception("Heartbeat self-edit write failed: %s", filename)
+        # ---- self-edits ----
 
-        if result.skills_proposed:
-            if not hasattr(self, "_edit_log_path"):
-                pass
+        for edit in result.self_edits:
+            filename = str(edit.get("file", "")).strip()
+            heading = str(edit.get("heading", "")).strip()
+            body = str(edit.get("body", "")).strip()
+            reason = str(edit.get("reason", "")).strip()
+            proposal = Proposal.new(
+                channel="self_edit", origin="heartbeat", action="append_section",
+                target=filename,
+                payload={"heading": heading, "body": body, "reason": reason},
+                evidence=reason,
+            )
+            decision = gov.submit(
+                proposal,
+                lambda f=filename, h=heading, b=body: self.self_state.append_section(
+                    f, h, b, message=f"Heartbeat append: {h}",
+                ),
+                extra_validators=(self._drift_validator(edit, recent_context),),
+            )
+            if decision.applied:
+                entry["self_edits_applied"].append({
+                    "file": filename, "heading": heading, "reason": reason,
+                })
+                self._emit(f"Heartbeat • self-edit: {filename} / {heading}")
+                logging.info("Heartbeat self-edit applied: %s / %s", filename, heading)
+            elif decision.verdict == "error":
+                entry["self_edits_rejected"].append({
+                    "file": filename, "reason": f"write error: {decision.reason}",
+                })
             else:
-                edit_log = self._load_edit_log()
-                skill_last_key = "__skill_last_proposed__"
-                skill_rate_ok = self._rate_limit_ok_with_cooldown(
-                    skill_last_key, edit_log, _SKILL_PROPOSAL_COOLDOWN_S
-                )
-                for proposal in result.skills_proposed:
-                    slug = str(proposal.get("slug", "")).strip()
-                    rejection = self._drift_check_skill(proposal, recent_context)
-                    if rejection:
-                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": rejection})
-                        logging.info("Heartbeat skill proposal rejected (%s): %s", slug, rejection)
-                        continue
-                    if not skill_rate_ok:
-                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": "rate-limited (24h)"})
-                        logging.info("Heartbeat skill proposal rate-limited: %s", slug)
-                        continue
-                    try:
-                        stamp = _now()
-                        content = build_skill_content(
-                            name=str(proposal.get("name", slug)).strip(),
-                            description=str(proposal.get("description", "")).strip(),
-                            when_to_use=str(proposal.get("when_to_use", "")).strip(),
-                            status="draft",
-                            note=f"Proposed by heartbeat on {stamp}. Review and activate when ready.",
-                        )
-                        self.skills.create(slug, content,
-                                           message=f"Heartbeat proposes skill: {slug}")
-                        edit_log[skill_last_key] = _now()
-                        self._save_edit_log(edit_log)
-                        skill_rate_ok = False  # one proposal per tick
-                        entry["skills_proposed_applied"].append({"slug": slug})
-                        self._emit(f"Heartbeat • skill draft proposed: {slug}")
-                        logging.info("Heartbeat skill proposal created (draft): %s", slug)
-                    except Exception as exc:
-                        entry["skills_proposed_rejected"].append({"slug": slug, "reason": f"write error: {exc}"})
-                        logging.exception("Heartbeat skill proposal write failed: %s", slug)
+                entry["self_edits_rejected"].append({
+                    "file": filename, "reason": decision.reason,
+                })
+                logging.info("Heartbeat self-edit rejected (%s): %s", filename, decision.reason)
 
-        if result.user_model_updates:
-            edit_log = self._load_edit_log()
-            for update in result.user_model_updates:
-                section = str(update.get("section", "")).strip()
-                key = str(update.get("key", "")).strip()
-                value = str(update.get("value", "")).strip()
-                if not section or not key or not value:
-                    continue
-                if section not in WRITABLE_SECTIONS:
-                    logging.info("Heartbeat user model update rejected: section '%s' not writable", section)
-                    continue
-                rate_key = f"__user_model_{section}__"
-                if not self._rate_limit_ok_with_cooldown(rate_key, edit_log, _USER_MODEL_COOLDOWN_S):
-                    logging.info("Heartbeat user model update rate-limited: %s / %s", section, key)
-                    continue
-                try:
-                    if self.user_model.upsert_entry(section, key, value):
-                        edit_log[rate_key] = _now()
-                        self._save_edit_log(edit_log)
-                        self._emit(f"Heartbeat • user model: {section} / {key}")
-                        logging.info("Heartbeat user model updated: %s / %s", section, key)
-                except Exception:
-                    logging.exception("Heartbeat user model update failed: %s / %s", section, key)
+        # ---- skill proposals ----
+
+        for proposal_spec in result.skills_proposed:
+            slug = str(proposal_spec.get("slug", "")).strip()
+            reason = str(proposal_spec.get("reason", "")).strip()
+            proposal = Proposal.new(
+                channel="skill", origin="heartbeat", action="create", target=slug,
+                payload={
+                    "name": str(proposal_spec.get("name", "")).strip(),
+                    "description": str(proposal_spec.get("description", "")).strip(),
+                    "when_to_use": str(proposal_spec.get("when_to_use", "")).strip(),
+                    "reason": reason,
+                },
+                evidence=reason,
+            )
+            decision = gov.submit(
+                proposal,
+                lambda spec=proposal_spec, s=slug: self._create_skill_draft(spec, s),
+                extra_validators=(self._skill_drift_validator(proposal_spec, recent_context),),
+            )
+            if decision.applied:
+                entry["skills_proposed_applied"].append({"slug": slug})
+                self._emit(f"Heartbeat • skill draft proposed: {slug}")
+                logging.info("Heartbeat skill proposal created (draft): %s", slug)
+            elif decision.verdict == "error":
+                entry["skills_proposed_rejected"].append({
+                    "slug": slug, "reason": f"write error: {decision.reason}",
+                })
+            else:
+                entry["skills_proposed_rejected"].append({
+                    "slug": slug, "reason": decision.reason,
+                })
+                logging.info("Heartbeat skill proposal rejected (%s): %s", slug, decision.reason)
+
+        # ---- user model ----
+
+        for update in result.user_model_updates:
+            section = str(update.get("section", "")).strip()
+            key = str(update.get("key", "")).strip()
+            value = str(update.get("value", "")).strip()
+            if not section or not key or not value:
+                continue
+            proposal = Proposal.new(
+                channel="user_model", origin="heartbeat", action="upsert",
+                target=section, payload={"key": key, "value": value},
+            )
+            decision = gov.submit(
+                proposal,
+                lambda s=section, k=key, v=value: self.user_model.upsert_entry(s, k, v),
+                rate_when=lambda changed: bool(changed),
+            )
+            if decision.applied and decision.result:
+                self._emit(f"Heartbeat • user model: {section} / {key}")
+                logging.info("Heartbeat user model updated: %s / %s", section, key)
+            elif decision.verdict != "applied":
+                logging.info("Heartbeat user model update rejected: %s / %s — %s",
+                             section, key, decision.reason)
 
         with self.journal_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")

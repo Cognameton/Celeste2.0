@@ -21,7 +21,8 @@ from wants import WantsStore
 from project_store import ProjectStore
 from learnings_store import LearningsStore
 from user_model import UserModel
-from executor import Executor
+from executor import Executor, ToolResult
+from governor import Governor, Proposal
 from performance_store import PerformanceStore
 from heartbeat import Heartbeat, HeartbeatConfig
 from context_compressor import ContextCompressor
@@ -176,6 +177,9 @@ class Agent:
         self.learnings = LearningsStore(self.self_state.root / "learnings")
         self.user_model = UserModel(self.self_state)
 
+        # Governor — the single gate every agent-originated write passes through
+        self.governor = Governor(self.self_state.root, on_event=self._emit_activity)
+
         # Heartbeat — idle thinking loop
         self._in_chat = False
         self._last_user_ts: float = 0.0
@@ -191,6 +195,7 @@ class Agent:
             self_state=self.self_state,
             wants=self.wants,
             user_model=self.user_model,
+            governor=self.governor,
             config=hb_cfg,
             is_busy=lambda: self._in_chat,
             last_user_activity_ts=lambda: self._last_user_ts,
@@ -201,6 +206,7 @@ class Agent:
 
         # Executor — sandboxed tool runner for the ReAct loop
         self.executor = Executor(working_dir=Path(cfg.data_dir) if getattr(cfg, "data_dir", None) else None)
+        self.governor.tool_risk_lookup = self._tool_risk
 
         # Performance tracking — outcome feedback loop
         self.performance = PerformanceStore(self.self_state.root / "performance")
@@ -225,6 +231,10 @@ class Agent:
     def close(self) -> None:
         try:
             self.heartbeat.stop()
+        except Exception:
+            pass
+        try:
+            self.governor.flush()
         except Exception:
             pass
         try:
@@ -258,6 +268,11 @@ class Agent:
         self.cfg.memory = memory_cfg
         return self.mem.set_engram_auto_prune(enabled)
 
+    def _tool_risk(self, name: str) -> Optional[str]:
+        """Risk level of a registered tool, or None if unknown (for Governor)."""
+        tool = self.executor._tools.get(name)
+        return tool.risk if tool is not None else None
+
     def _emit_activity(self, msg: str) -> None:
         if callable(self.activity_cb):
             try:
@@ -273,12 +288,22 @@ class Agent:
 
     # ---------- Prompt pieces ----------
     def _on_reflection_add(self, text: str) -> None:
-        self.playbook.add_rule(text, source="teacher")
-        self._emit_activity(f"Reflection • rule added: {text[:80]}")
+        decision = self.governor.submit(
+            Proposal.new(channel="reflection_rule", origin="reflector", action="add",
+                         target="", payload={"text": text}),
+            lambda: self.playbook.add_rule(text, source="teacher"),
+        )
+        if decision.applied:
+            self._emit_activity(f"Reflection • rule added: {text[:80]}")
 
     def _on_reflection_update(self, index: int, text: str) -> None:
-        self.playbook.update_by_index(index, text)
-        self._emit_activity(f"Reflection • rule updated (#{index}): {text[:60]}")
+        decision = self.governor.submit(
+            Proposal.new(channel="reflection_rule", origin="reflector", action="update",
+                         target=str(index), payload={"text": text}),
+            lambda: self.playbook.update_by_index(index, text),
+        )
+        if decision.applied:
+            self._emit_activity(f"Reflection • rule updated (#{index}): {text[:60]}")
 
     def _on_reflection_flag(self, reason: str) -> None:
         logging.info("Reflector flagged rulebook: %s", reason)
@@ -287,33 +312,67 @@ class Agent:
             self.reflection_flag_cb(reason)
 
     def _on_reflection_correction(self, content: str) -> None:
-        self.learnings.append("correction", content, trigger="user-correction")
-        self.user_model.log_correction(content)
-        self._emit_activity(f"Reflection • correction captured: {content[:80]}")
-        logging.info("Reflector: correction captured")
+        def apply() -> None:
+            self.learnings.append("correction", content, trigger="user-correction")
+            self.user_model.log_correction(content)
+
+        decision = self.governor.submit(
+            Proposal.new(channel="user_model", origin="reflector", action="log_correction",
+                         target="Corrections", payload={"content": content}),
+            apply,
+        )
+        if decision.applied:
+            self._emit_activity(f"Reflection • correction captured: {content[:80]}")
+            logging.info("Reflector: correction captured")
 
     def _on_reflection_skill_draft(
         self, name: str, description: str, when_to_use: str, body: str
     ) -> None:
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "skill"
+        evidence = f"Reflector observed this pattern twice: {description}".strip()
         existing = self.skills.get(slug)
         if existing and existing.status == "draft":
-            # Second sighting of this pattern — promote draft to active
-            if self.skills.promote(slug):
+            # Second sighting of this pattern — promote draft to active.
+            # Promotion is deliberately not rate-limited (see PHASE9.md #7).
+            def promote() -> bool:
+                if not self.skills.promote(slug):
+                    return False
                 self.learnings.append(
                     "skill_draft", f"{name}: promoted to active", trigger="reflector-confirm"
                 )
+                return True
+
+            decision = self.governor.submit(
+                Proposal.new(channel="skill", origin="reflector", action="promote",
+                             target=slug, payload={"name": name}, evidence=evidence),
+                promote,
+            )
+            if decision.applied and decision.result:
                 self._emit_activity(f"Reflection • skill promoted to active: {slug}")
                 logging.info("Reflector: skill draft promoted to active: %s", slug)
                 return
+            if decision.applied:
+                return
         if not self.skills.exists(slug):
-            content = build_skill_content(
-                name, description, when_to_use, status="draft", note="auto-proposed by reflector"
+            def create() -> None:
+                content = build_skill_content(
+                    name, description, when_to_use, status="draft",
+                    note="auto-proposed by reflector",
+                )
+                self.skills.create(slug, content, message=f"Skill draft: {name}")
+                self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
+
+            decision = self.governor.submit(
+                Proposal.new(channel="skill", origin="reflector", action="create",
+                             target=slug,
+                             payload={"name": name, "description": description,
+                                      "when_to_use": when_to_use},
+                             evidence=evidence),
+                create,
             )
-            self.skills.create(slug, content, message=f"Skill draft: {name}")
-            self.learnings.append("skill_draft", f"{name}: {description}", trigger="reflector")
-            self._emit_activity(f"Reflection • skill draft created: {slug}")
-            logging.info("Reflector: skill draft created: %s", slug)
+            if decision.applied:
+                self._emit_activity(f"Reflection • skill draft created: {slug}")
+                logging.info("Reflector: skill draft created: %s", slug)
 
     def build_system_prompt(self, query: str = "") -> str:
         playbook_text = self.playbook.format_for_prompt(query=query, top_k=5).strip()
@@ -436,7 +495,16 @@ class Agent:
 
             tools_used = True
             tool_name, tool_args = parsed
-            result = self.executor.execute(tool_name, tool_args)
+            decision = self.governor.submit(
+                Proposal.new(channel="tool", origin="react", action="execute",
+                             target=tool_name, payload=dict(tool_args)),
+                lambda: self.executor.execute(tool_name, tool_args),
+            )
+            result = decision.result
+            if result is None:
+                # Governor rejected or the call blew up before the executor ran.
+                # Mirror the executor's own error shape so the transcript is unchanged.
+                result = ToolResult(tool_name, "", decision.reason or "rejected by governor")
             result_text = result.output if result.ok else f"[Error: {result.error}]"
             self._emit_activity(f"ReAct • tool: {tool_name} → {'ok' if result.ok else 'error'}")
             logging.info("ReAct: tool=%s ok=%s", tool_name, result.ok)

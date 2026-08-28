@@ -197,6 +197,15 @@ def test_unrated_channels_and_flush(root: Path):
                         target="Expertise", payload={"key": "Python", "value": "deep"})
     assert g.submit(good, lambda: True).verdict == "applied"
     assert g.submit(good, lambda: True).validator == "v_rate_limit"
+    # rate_when: an upsert that changed nothing must not consume the cooldown
+    noop = Proposal.new(channel="user_model", origin="heartbeat", action="upsert",
+                        target="Inferred Goals", payload={"key": "k", "value": "v"})
+    d = g.submit(noop, lambda: False, rate_when=lambda changed: bool(changed))
+    assert d.verdict == "applied" and d.result is False, d
+    assert "__user_model_Inferred Goals__" not in json.loads(g.rate_log_path.read_text())
+    d = g.submit(noop, lambda: True, rate_when=lambda changed: bool(changed))
+    assert d.verdict == "applied"
+    assert g.submit(noop, lambda: True).validator == "v_rate_limit"
     # log_correction is not rate-limited
     corr = Proposal.new(channel="user_model", origin="reflector", action="log_correction",
                         target="Corrections", payload={"content": "x"})

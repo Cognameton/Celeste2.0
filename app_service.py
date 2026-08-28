@@ -74,6 +74,12 @@ class CelesteService:
         if self.agent is not None:
             self.agent.activity_cb = cb
 
+    def get_governor_ledger(self, n: int = 50) -> list[dict[str, Any]]:
+        if self.agent is None:
+            self.start()
+        assert self.agent is not None
+        return self.agent.governor.ledger_tail(n)
+
     def get_rulebook(self) -> list[dict[str, Any]]:
         if self.agent is None:
             self.start()

@@ -260,8 +260,15 @@ class Governor:
     # ---- the gate ----
 
     def submit(self, proposal: Proposal, apply_fn: Callable[[], Any],
-               extra_validators: tuple[Validator, ...] = ()) -> Decision:
-        """Validate, apply, record. Never raises."""
+               extra_validators: tuple[Validator, ...] = (),
+               rate_when: Callable[[Any], bool] | None = None) -> Decision:
+        """Validate, apply, record. Never raises.
+
+        ``rate_when`` is an optional predicate on apply_fn's return value: the
+        cooldown is consumed only when it returns True. Heartbeat's user-model
+        writes need this — an upsert that changed nothing never burned the
+        cooldown before Phase 9, and must not start now.
+        """
         decision: Decision
         try:
             for validator in self._validators(tuple(extra_validators)):
@@ -281,7 +288,8 @@ class Governor:
                 try:
                     result = apply_fn()
                     decision = Decision(proposal.id, "applied", result=result)
-                    self._note_applied(proposal)
+                    if rate_when is None or rate_when(result):
+                        self._note_applied(proposal)
                 except Exception as exc:
                     logging.exception("Governor apply failed: %s/%s %s",
                                       proposal.channel, proposal.action, proposal.target)
