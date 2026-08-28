@@ -99,7 +99,24 @@ any capability Celeste already has.
   channels default to auto-apply) — but everything flows through one gate with
   one audit trail. This is deliberately a refactor-with-ledger, not a lockdown.
 
-## Phase 10 — Trust ladder (the new organ)
+## Phase 10 — Trust ladder (the new organ) — **IMPLEMENTED 2026-08-28**
+
+Landed on `synthesis`: `9145d51` (stage doc `docs/stages/PHASE10.md`),
+`b9703f3` (`trust.py` + 13 tests), `cd158ba` (governor/agent/service wiring).
+Acceptance checks 1–5 pass. With every channel at its initial `review` tier the
+behavior is identical to Phase 9 — the neutrality probe now runs with a live
+ladder and asserts nothing moved.
+
+Deferred, behind the same GPU gate as Phase 9's live-desktop check: the trust
+**UI panel** (tier table, pending-approval list, one-click revert). The service
+seam it binds to exists — `get_trust_tiers`, `set_trust_tier`,
+`get_track_record`, `list_pending`, `approve_pending`, `reject_pending`,
+`record_revert`, `evaluate_trust` in `app_service.py`.
+
+Known limit, deliberate: the `propose` queue holds thunks in memory, so an
+approval cannot outlive the process that queued it; stale rows are marked
+expired on startup. A durable queue is worth building only once Phase 12's
+daemon is long-lived.
 
 Per-channel autonomy tiers, evidence-driven:
 
