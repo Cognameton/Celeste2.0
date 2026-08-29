@@ -1,7 +1,7 @@
 """ProjectStore — persistent project tracker for Synthia.
 
 Projects live in self/projects/<slug>.md as markdown files with YAML frontmatter.
-Active projects are injected into the system prompt so Celeste maintains
+Active projects are injected into the system prompt so Synthia maintains
 awareness of ongoing work as a research partner.
 """
 from __future__ import annotations

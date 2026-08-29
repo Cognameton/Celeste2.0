@@ -30,7 +30,7 @@ SELF_FILES = ("IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md")
 IMMUTABLE_BY_AGENT = frozenset({"IDENTITY.md"})
 BOOTSTRAP_FILE = "BOOTSTRAP.md"
 
-_GIT_AUTHOR = ("user.name=Celeste", "user.email=celeste@local")
+_GIT_AUTHOR = ("user.name=Synthia", "user.email=synthia@local")
 
 
 @dataclass
@@ -69,7 +69,7 @@ class SelfState:
                 candidate = stripped[5:].rstrip(" .!?\n\t\"'")
                 if candidate:
                     return candidate
-        return "Celeste"
+        return "Synthia"
 
     def all_for_prompt(self, files: Iterable[str] = SELF_FILES) -> str:
         sections = []

@@ -1,4 +1,4 @@
-"""Heartbeat — Celeste's idle thinking loop.
+"""Heartbeat — Synthia's idle thinking loop.
 
 A background thread that wakes on a timer. When the user is not actively
 interacting, it calls the LLM with a grounded prompt and gets back a
@@ -120,7 +120,7 @@ class Heartbeat:
     def start(self) -> None:
         if not self.config.enabled or self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._loop, name="celeste-heartbeat", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="synthia-heartbeat", daemon=True)
         self._thread.start()
         logging.info("Heartbeat started (interval=%ss)", self.config.tick_interval_s)
 
@@ -245,7 +245,7 @@ class Heartbeat:
 
         skills_block = self.skills.for_prompt(include_drafts=True) or "(none)"
 
-        return f"""You are Celeste. This is a heartbeat — your private idle moment between conversations. The user is not present and will not see this output. You are not producing a chat reply. You are thinking.
+        return f"""You are {self.self_state.name}. This is a heartbeat — your private idle moment between conversations. The user is not present and will not see this output. You are not producing a chat reply. You are thinking.
 
 [Self]
 {self_block}

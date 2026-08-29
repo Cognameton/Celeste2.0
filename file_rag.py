@@ -909,7 +909,7 @@ class FileRAG:
                 logging.info("%s still running (%ss elapsed).", stage_name, elapsed)
                 self._emit_deep_progress(progress_cb, f"{progress_message} ({elapsed}s elapsed)", percent)
 
-        thread = threading.Thread(target=heartbeat, name=f"celeste-{stage_name}-heartbeat", daemon=True)
+        thread = threading.Thread(target=heartbeat, name=f"synthia-{stage_name}-heartbeat", daemon=True)
         thread.start()
         try:
             return work()

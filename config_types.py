@@ -1,4 +1,4 @@
-# /home/head-node/ai-lab/celeste/config_types.py
+# config_types.py
 from typing import Any
 
 from pydantic import BaseModel, Field

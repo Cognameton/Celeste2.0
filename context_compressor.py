@@ -27,7 +27,7 @@ _SUMMARY_SECTIONS = (
 _SUMMARY_PROMPT = """\
 You are summarizing a conversation segment to preserve its key content as a compact \
 Session Memory block. The conversation is between a user (Shane) and an AI research \
-partner (Celeste).
+partner ({assistant_name}).
 
 Produce a structured summary with exactly these four sections. Be specific and concrete \
 — this will be the only record of these turns. Omit sections that have nothing to report \
@@ -57,9 +57,11 @@ class ContextCompressor:
         _recent_turns = [{"role": "summary", ...}] + last keep_turns turns
     """
 
-    def __init__(self, llm: Any, *, max_turns: int = 16, keep_turns: int = 6,
+    def __init__(self, llm: Any, *, assistant_name: str = "Synthia",
+                 max_turns: int = 16, keep_turns: int = 6,
                  max_summary_tokens: int = 500):
         self.llm = llm
+        self.assistant_name = assistant_name or "Synthia"
         self.max_turns = max_turns
         self.keep_turns = keep_turns
         self.max_summary_tokens = max_summary_tokens
@@ -107,7 +109,7 @@ class ContextCompressor:
                 f"[New turns to incorporate]\n{turns_text}"
             )
 
-        prompt = _SUMMARY_PROMPT.format(turns=turns_text)
+        prompt = _SUMMARY_PROMPT.format(turns=turns_text, assistant_name=self.assistant_name)
         try:
             raw = self.llm.generate(
                 prompt,
@@ -129,7 +131,7 @@ class ContextCompressor:
             # Fallback: plain concatenation so we don't lose turns entirely
             lines = []
             for t in turns[-4:]:
-                role = "User" if t.get("role") == "user" else "Celeste"
+                role = "User" if t.get("role") == "user" else self.assistant_name
                 snippet = (t.get("content") or "")[:200].replace("\n", " ")
                 lines.append(f"{role}: {snippet}")
             result = (
@@ -144,7 +146,7 @@ class ContextCompressor:
     def _format_turns_for_summary(turns: list[dict[str, Any]]) -> str:
         lines = []
         for t in turns:
-            role = "User" if t.get("role") == "user" else "Celeste"
+            role = "User" if t.get("role") == "user" else self.assistant_name
             content = (t.get("content") or "").strip()
             if len(content) > 600:
                 content = content[:600] + "…"

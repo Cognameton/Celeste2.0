@@ -212,7 +212,7 @@ class TTSManager:
     def _speak_piper(self, text: str) -> None:
         tmp_path = None
         try:
-            fd, tmp_path = tempfile.mkstemp(prefix="celeste-tts-", suffix=".wav")
+            fd, tmp_path = tempfile.mkstemp(prefix="synthia-tts-", suffix=".wav")
             os.close(fd)
 
             cmd = [

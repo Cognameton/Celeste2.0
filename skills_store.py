@@ -1,4 +1,4 @@
-"""SkillsStore — reads and manages Celeste's skill library.
+"""SkillsStore — reads and manages Synthia's skill library.
 
 Skills live in self/skills/<slug>/SKILL.md. Each file has YAML frontmatter
 with name, description, when_to_use, and status fields, followed by optional

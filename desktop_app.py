@@ -393,7 +393,7 @@ class ServiceWorker(QObject):
 
         self._chat_thread = threading.Thread(
             target=_run_chat,
-            name="celeste-chat-worker",
+            name="synthia-chat-worker",
             daemon=True,
         )
         self._chat_thread.start()
@@ -439,7 +439,7 @@ class ServiceWorker(QObject):
 
         self._reload_thread = threading.Thread(
             target=_run_reload,
-            name="celeste-reload-worker",
+            name="synthia-reload-worker",
             daemon=True,
         )
         self._reload_thread.start()
@@ -508,7 +508,7 @@ class ServiceWorker(QObject):
 
         self._deep_index_thread = threading.Thread(
             target=_run_deep_index,
-            name="celeste-deep-index-worker",
+            name="synthia-deep-index-worker",
             daemon=True,
         )
         self._deep_index_thread.start()
@@ -517,7 +517,7 @@ class ServiceWorker(QObject):
     def remove_rag_directory(self, directory: str) -> None:
         try:
             logging.info("Worker remove RAG directory requested: %s", directory)
-            self.status.emit(f"Removing {directory} from Celeste file access...")
+            self.status.emit(f"Removing {directory} from Synthia file access...")
             cfg, stats = self.service.remove_rag_directory(directory)
             message = (
                 f"Removed directory. Remaining index contains "
@@ -783,7 +783,7 @@ class SynthiaWindow(QMainWindow):
         rag_title.setObjectName("panelTitle")
         settings_layout.addWidget(rag_title)
 
-        rag_subtitle = QLabel("Choose directories Celeste can search when answering questions about local files.")
+        rag_subtitle = QLabel("Choose directories Synthia can search when answering questions about local files.")
         rag_subtitle.setWordWrap(True)
         rag_subtitle.setObjectName("panelSubtitle")
         settings_layout.addWidget(rag_subtitle)
@@ -865,7 +865,7 @@ class SynthiaWindow(QMainWindow):
         chat_layout.addWidget(chat_title)
 
         self.chat_hint = QLabel(
-            'Library lookup hint: mention "indexed library", "documents", "files", or ask Celeste to search the library when you want document-backed answers.'
+            'Library lookup hint: mention "indexed library", "documents", "files", or ask Synthia to search the library when you want document-backed answers.'
         )
         self.chat_hint.setWordWrap(True)
         self.chat_hint.setObjectName("panelSubtitle")
@@ -885,7 +885,7 @@ class SynthiaWindow(QMainWindow):
         stream_frame_layout = QVBoxLayout(self.stream_frame)
         stream_frame_layout.setContentsMargins(8, 6, 8, 6)
         stream_frame_layout.setSpacing(4)
-        self._stream_speaker_label = QLabel("Celeste")
+        self._stream_speaker_label = QLabel("Synthia")
         self._stream_speaker_label.setStyleSheet("font-weight: 700; color: #a8ffcf;")
         stream_frame_layout.addWidget(self._stream_speaker_label)
         self.stream_preview = QPlainTextEdit()
@@ -899,7 +899,7 @@ class SynthiaWindow(QMainWindow):
         chat_layout.addWidget(self.stream_frame)
 
         self.input_box = QPlainTextEdit()
-        self.input_box.setPlaceholderText("Type a prompt for Celeste...")
+        self.input_box.setPlaceholderText("Type a prompt for Synthia...")
         self.input_box.setFixedHeight(120)
         chat_layout.addWidget(self.input_box)
 
@@ -1297,7 +1297,7 @@ class SynthiaWindow(QMainWindow):
     @Slot(str, str, str)
     def _on_reply_ready(self, answer: str, critique: str, improvements: str) -> None:
         self._hide_stream_preview()
-        self._append_chat("Celeste", answer, "#a8ffcf", split_sources=True)
+        self._append_chat("Synthia", answer, "#a8ffcf", split_sources=True)
         if critique.strip():
             self._append_chat("Critique", critique, "#ffd6a5")
         if improvements.strip():
@@ -1354,7 +1354,7 @@ class SynthiaWindow(QMainWindow):
 
     def _export_chat(self) -> None:
         from datetime import datetime
-        default_name = f"celeste_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        default_name = f"synthia_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         path, _ = QFileDialog.getSaveFileName(self, "Export Chat", default_name, "Markdown (*.md);;Text (*.txt)")
         if not path:
             return
@@ -1569,7 +1569,7 @@ class SynthiaWindow(QMainWindow):
     def _choose_rag_directory(self) -> None:
         if self.busy:
             return
-        directory = QFileDialog.getExistingDirectory(self, "Choose Directory for Celeste File Access")
+        directory = QFileDialog.getExistingDirectory(self, "Choose Directory for Synthia File Access")
         if not directory:
             return
         self._busy_reason = "rag_dir_change"

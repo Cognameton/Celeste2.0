@@ -224,6 +224,7 @@ class Agent:
         comp_cfg = dict(getattr(cfg, "context_compression", {}) or {})
         self.compressor = ContextCompressor(
             self.llm,
+            assistant_name=self.self_state.name,
             max_turns=int(comp_cfg.get("max_turns", 16)),
             keep_turns=int(comp_cfg.get("keep_turns", 6)),
             max_summary_tokens=int(comp_cfg.get("max_summary_tokens", 500)),
@@ -599,7 +600,7 @@ class Agent:
         kept: list[str] = []
         consumed = 0
         for turn in reversed(raw_turns[-12:]):
-            role = "User" if turn.get("role") == "user" else "Celeste"
+            role = "User" if turn.get("role") == "user" else self.self_state.name
             content = (turn.get("content") or "").replace("\n", " ").strip()
             if len(content) > per_turn_chars:
                 content = content[:per_turn_chars] + "..."
@@ -709,7 +710,7 @@ class Agent:
             text,
         )
         text = re.sub(r"(?im)^(user|assistant|system|instruction)\s*:\s*$", "", text)
-        text = re.sub(r"(?im)^-\s*(hello celeste|helloceleste)\s*$", "", text)
+        text = re.sub(r"(?im)^-\s*(hello synthia|hellosynthia)\s*$", "", text)
 
         cleaned_lines: list[str] = []
         for raw_line in text.splitlines():

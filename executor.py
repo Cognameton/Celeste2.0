@@ -1,4 +1,4 @@
-"""Executor — sandboxed tool registry for Celeste's ReAct loop.
+"""Executor — sandboxed tool registry for Synthia's ReAct loop.
 
 Tools are registered with a risk level:
   safe    — auto-execute (read-only, bounded output)

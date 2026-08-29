@@ -37,7 +37,15 @@ def show_config(cfg: AgentConfig):
 
 # ------------------------------ Command wiring ------------------------------ #
 CMD_PREFIX = "!"
-PLAYBOOK_PATH = "/media/head-node/C27B-044E/celeste/playbook.md"  # change if you prefer
+# Lives alongside the runtime data dir from config.yaml (override with
+# SYNTHIA_PLAYBOOK_PATH). Derived rather than hardcoded so it follows the
+# configured data_dir instead of pinning one machine's layout.
+def _playbook_path(cfg) -> str:
+    override = os.environ.get("SYNTHIA_PLAYBOOK_PATH")
+    if override:
+        return override
+    base = getattr(cfg, "data_dir", "") or os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "playbook.md")
 
 def is_command(text: str) -> bool:
     return text.strip().startswith(CMD_PREFIX)
@@ -69,11 +77,13 @@ def _memory_add(memory, text: str, meta: dict | None = None, cfg: AgentConfig | 
     except Exception:
         return False
 
-def _playbook_add(text: str):
-    os.makedirs(os.path.dirname(PLAYBOOK_PATH), exist_ok=True)
-    with open(PLAYBOOK_PATH, "a", encoding="utf-8") as f:
+def _playbook_add(text: str, cfg) -> str:
+    path = _playbook_path(cfg)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
         f.write("\n## Update (" + datetime.now().isoformat(timespec="seconds") + ")\n")
         f.write(text.strip() + "\n")
+    return path
 
 def handle_command(cmd_line: str, cfg: AgentConfig, agent: Agent) -> str:
     """Process in-chat commands. Returns a status string; does NOT send text to the model."""
@@ -105,13 +115,13 @@ def handle_command(cmd_line: str, cfg: AgentConfig, agent: Agent) -> str:
 
     if verb == "!playbook":
         try:
-            _playbook_add(payload)
-            return f"📒 playbook updated → {PLAYBOOK_PATH}"
+            path = _playbook_add(payload, cfg)
+            return f"📒 playbook updated → {path}"
         except Exception as exc:
             return f"⚠️ failed to update playbook: {exc}"
 
     if verb == "!identity":
-        # Accept forms like: user=Shane assistant=Celeste (order independent)
+        # Accept forms like: user=Shane assistant=Synthia (order independent)
         u = re.search(r"user\s*=\s*([^\s,;]+)", payload, re.I)
         a = re.search(r"assistant\s*=\s*([^\s,;]+)", payload, re.I)
         msgs = []
@@ -123,7 +133,7 @@ def handle_command(cmd_line: str, cfg: AgentConfig, agent: Agent) -> str:
             name = a.group(1)
             ok = _memory_add(memory, f"Set assistant name: {name}", meta={"type": "identity", "source": "user_command"}, cfg=cfg)
             msgs.append("assistant=" + name + ("✅" if ok else "⚠️"))
-        return "👤 identity updated: " + ", ".join(msgs) if msgs else "👤 provide values like: user=Shane assistant=Celeste"
+        return "👤 identity updated: " + ", ".join(msgs) if msgs else "👤 provide values like: user=Shane assistant=Synthia"
 
     return "⚠️ unknown command. Try !help"
 
@@ -138,8 +148,8 @@ def main():
         console.print("[bold red]Model file not found.[/bold red]")
         console.print(f"Configured `model_path`: {cfg.model_path}")
         console.print(
-            "Update /home/head-node/Dev/ai-lab/celeste/config.yaml "
-            "or set `CELESTE_MODEL_PATH` before launching."
+            "Update /home/head-node/Dev/ai-lab/synthia/config.yaml "
+            "or set `SYNTHIA_MODEL_PATH` before launching."
         )
         candidates = discover_local_models(limit=8)
         if candidates:

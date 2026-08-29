@@ -1,6 +1,6 @@
 """Trust ladder — per-channel autonomy tiers, earned from evidence.
 
-Phases 1-8 set trust to maximum: Celeste edited her own operating files
+Phases 1-8 set trust to maximum: Synthia edited her own operating files
 directly. Nova 2.0 set it to minimum: deterministic code owned every write.
 This module makes trust a *variable* — per channel, computed from her track
 record, and revocable.

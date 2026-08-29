@@ -204,7 +204,7 @@ class Reflector:
                 "on_correction": on_correction,
                 "on_skill_draft": on_skill_draft,
             },
-            name="celeste-reflection-worker",
+            name="synthia-reflection-worker",
             daemon=True,
         ).start()
 

@@ -10,7 +10,7 @@ from model_runner import normalize_path
 def load_config(path: str) -> AgentConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
-    model_override = os.environ.get("CELESTE_MODEL_PATH")
+    model_override = os.environ.get("SYNTHIA_MODEL_PATH")
     if model_override:
         raw["model_path"] = model_override
     cfg = AgentConfig(**raw)

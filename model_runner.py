@@ -540,7 +540,7 @@ class LLMRunner:
         self.server_url = f"http://127.0.0.1:{port}"
         log_dir = tempfile.gettempdir()
         os.makedirs(log_dir, exist_ok=True)
-        self.server_log_path = os.path.join(log_dir, f"celeste-llama-server-{port}.log")
+        self.server_log_path = os.path.join(log_dir, f"synthia-llama-server-{port}.log")
         cmd = [
             server_bin,
             "-m",

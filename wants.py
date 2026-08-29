@@ -1,4 +1,4 @@
-"""Wants — Celeste's persistent goals and curiosities.
+"""Wants — Synthia's persistent goals and curiosities.
 
 Each want is a thing she has decided she would like to know, do, or resolve.
 Wants come from three places:

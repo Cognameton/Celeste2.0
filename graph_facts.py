@@ -32,7 +32,7 @@ def record_runtime_graph_facts(mem: Any, cfg: Any, *, source_ref: str = "agent-s
         str(getattr(cfg, "backend", "unknown")),
         src_name=machine_name,
         dst_name=str(getattr(cfg, "backend", "unknown")),
-        evidence=f"Celeste is configured to use the {getattr(cfg, 'backend', 'unknown')} backend.",
+        evidence=f"Synthia is configured to use the {getattr(cfg, 'backend', 'unknown')} backend.",
         source_ref=source_ref,
     )
     graph.connect(
@@ -43,7 +43,7 @@ def record_runtime_graph_facts(mem: Any, cfg: Any, *, source_ref: str = "agent-s
         str(getattr(cfg, "data_dir", "")),
         src_name=machine_name,
         dst_name=str(getattr(cfg, "data_dir", "")),
-        evidence=f"Celeste stores its runtime data in {getattr(cfg, 'data_dir', '')}.",
+        evidence=f"Synthia stores its runtime data in {getattr(cfg, 'data_dir', '')}.",
         source_ref=source_ref,
     )
 

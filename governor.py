@@ -40,7 +40,7 @@ MAX_PAYLOAD_CHARS = 8000                # generous ceiling; drift checks are tig
 # Rate-limit key used by heartbeat's legacy edit_log.json for skill proposals.
 SKILL_RATE_KEY = "__skill_last_proposed__"
 
-_GIT_AUTHOR = ("user.name=Celeste", "user.email=celeste@local")
+_GIT_AUTHOR = ("user.name=Synthia", "user.email=synthia@local")
 
 
 def _now() -> str:
