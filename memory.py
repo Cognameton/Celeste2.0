@@ -1,4 +1,4 @@
-# memory.py — Celeste vector memory
+# memory.py — Synthia vector memory
 # - GPU-first SentenceTransformers embeddings (fallback to CPU)
 # - Explicit Chroma usage (no Chroma embedding wrapper)
 # - Only index selected kinds to avoid prompt bloat

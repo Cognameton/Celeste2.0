@@ -210,7 +210,7 @@ class Executor:
     def _web_fetch(self, url: str) -> str:
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"URL must start with http:// or https://")
-        req = urllib.request.Request(url, headers={"User-Agent": "Celeste/2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Synthia/2.0"})
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
                 raw = resp.read(MAX_READ_BYTES).decode("utf-8", errors="replace")

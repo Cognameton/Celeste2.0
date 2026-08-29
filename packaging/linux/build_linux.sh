@@ -19,55 +19,55 @@ if [ ! -x "$LLAMA_SERVER" ]; then
   exit 1
 fi
 
-rm -rf "$PROJECT_ROOT/dist/Celeste" "$PROJECT_ROOT/build/Celeste"
-python -m PyInstaller packaging/pyinstaller/celeste.spec --noconfirm --clean
+rm -rf "$PROJECT_ROOT/dist/Synthia" "$PROJECT_ROOT/build/Synthia"
+python -m PyInstaller packaging/pyinstaller/synthia.spec --noconfirm --clean
 
-mkdir -p "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin"
-cp -a "$LLAMA_BIN_DIR/." "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/"
-chmod +x "$PROJECT_ROOT/dist/Celeste/vendor/llama.cpp/build/bin/llama-server"
+mkdir -p "$PROJECT_ROOT/dist/Synthia/vendor/llama.cpp/build/bin"
+cp -a "$LLAMA_BIN_DIR/." "$PROJECT_ROOT/dist/Synthia/vendor/llama.cpp/build/bin/"
+chmod +x "$PROJECT_ROOT/dist/Synthia/vendor/llama.cpp/build/bin/llama-server"
 
 if [ -d "$PROJECT_ROOT/models" ]; then
-  cp -a "$PROJECT_ROOT/models" "$PROJECT_ROOT/dist/Celeste/models"
+  cp -a "$PROJECT_ROOT/models" "$PROJECT_ROOT/dist/Synthia/models"
 fi
 
 if [ -d "$PROJECT_ROOT/embeddings" ]; then
-  cp -a "$PROJECT_ROOT/embeddings" "$PROJECT_ROOT/dist/Celeste/embeddings"
+  cp -a "$PROJECT_ROOT/embeddings" "$PROJECT_ROOT/dist/Synthia/embeddings"
 fi
 
 if [ -d "$PROJECT_ROOT/piper/linux" ]; then
-  mkdir -p "$PROJECT_ROOT/dist/Celeste/piper"
-  cp -a "$PROJECT_ROOT/piper/linux" "$PROJECT_ROOT/dist/Celeste/piper/linux"
+  mkdir -p "$PROJECT_ROOT/dist/Synthia/piper"
+  cp -a "$PROJECT_ROOT/piper/linux" "$PROJECT_ROOT/dist/Synthia/piper/linux"
 fi
 
 if [ -d "$PROJECT_ROOT/voices" ]; then
-  cp -a "$PROJECT_ROOT/voices" "$PROJECT_ROOT/dist/Celeste/voices"
+  cp -a "$PROJECT_ROOT/voices" "$PROJECT_ROOT/dist/Synthia/voices"
 fi
 
 mkdir -p "$PROJECT_ROOT/dist/packages"
-tar -C "$PROJECT_ROOT/dist" -czf "$PROJECT_ROOT/dist/packages/Celeste-linux-x86_64.tar.gz" Celeste
+tar -C "$PROJECT_ROOT/dist" -czf "$PROJECT_ROOT/dist/packages/Synthia-linux-x86_64.tar.gz" Synthia
 
 if command -v appimagetool >/dev/null 2>&1; then
-  APPDIR="$PROJECT_ROOT/dist/Celeste.AppDir"
+  APPDIR="$PROJECT_ROOT/dist/Synthia.AppDir"
   rm -rf "$APPDIR"
   mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
-  cp -a "$PROJECT_ROOT/dist/Celeste/." "$APPDIR/usr/bin/"
+  cp -a "$PROJECT_ROOT/dist/Synthia/." "$APPDIR/usr/bin/"
   cat > "$APPDIR/AppRun" <<'SH'
 #!/usr/bin/env bash
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$HERE/usr/bin/Celeste" "$@"
+exec "$HERE/usr/bin/Synthia" "$@"
 SH
   chmod +x "$APPDIR/AppRun"
-  cat > "$APPDIR/Celeste.desktop" <<'DESKTOP'
+  cat > "$APPDIR/Synthia.desktop" <<'DESKTOP'
 [Desktop Entry]
-Name=Celeste
-Exec=Celeste
-Icon=celeste_icon
+Name=Synthia
+Exec=Synthia
+Icon=synthia_icon
 Type=Application
 Categories=Utility;
 DESKTOP
-  cp "$PROJECT_ROOT/assets/celeste_icon.png" "$APPDIR/celeste_icon.png"
-  cp "$APPDIR/Celeste.desktop" "$APPDIR/usr/share/applications/Celeste.desktop"
-  appimagetool "$APPDIR" "$PROJECT_ROOT/dist/packages/Celeste-x86_64.AppImage"
+  cp "$PROJECT_ROOT/assets/synthia_icon.png" "$APPDIR/synthia_icon.png"
+  cp "$APPDIR/Synthia.desktop" "$APPDIR/usr/share/applications/Synthia.desktop"
+  appimagetool "$APPDIR" "$PROJECT_ROOT/dist/packages/Synthia-x86_64.AppImage"
 else
-  echo "appimagetool not found. Generated dist/packages/Celeste-linux-x86_64.tar.gz, but skipped AppImage creation."
+  echo "appimagetool not found. Generated dist/packages/Synthia-linux-x86_64.tar.gz, but skipped AppImage creation."
 fi

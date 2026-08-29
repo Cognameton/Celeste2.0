@@ -1,4 +1,4 @@
-# agent.py — Celeste agent (chat-style prompt, strict stops, perspective guard)
+# agent.py — Synthia agent (chat-style prompt, strict stops, perspective guard)
 import os
 import json
 import logging
@@ -106,7 +106,7 @@ class Agent:
     def __init__(self, cfg: AgentConfig, status_cb: Callable[[str], None] | None = None):
         self.cfg = cfg
         self._status_cb = status_cb
-        self._emit_status("Preparing Celeste workspace...")
+        self._emit_status("Preparing Synthia workspace...")
         os.makedirs(self.cfg.data_dir, exist_ok=True)
 
         self._live_guidance: str = ""
@@ -229,7 +229,7 @@ class Agent:
             max_summary_tokens=int(comp_cfg.get("max_summary_tokens", 500)),
         ) if bool(comp_cfg.get("enabled", True)) else None
 
-        self._emit_status("Celeste startup complete.")
+        self._emit_status("Synthia startup complete.")
 
     def _emit_status(self, message: str) -> None:
         logging.info("Agent status: %s", message)

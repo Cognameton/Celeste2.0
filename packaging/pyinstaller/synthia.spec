@@ -9,8 +9,8 @@ PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 
 datas = [
     (str(PROJECT_ROOT / "config.example.yaml"), "."),
-    (str(PROJECT_ROOT / "assets" / "celeste_icon.png"), "assets"),
-    (str(PROJECT_ROOT / "assets" / "celeste_icon.ico"), "assets"),
+    (str(PROJECT_ROOT / "assets" / "synthia_icon.png"), "assets"),
+    (str(PROJECT_ROOT / "assets" / "synthia_icon.ico"), "assets"),
 ]
 binaries = []
 hiddenimports = []
@@ -50,8 +50,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Celeste",
-    icon=str(PROJECT_ROOT / "assets" / "celeste_icon.ico"),
+    name="Synthia",
+    icon=str(PROJECT_ROOT / "assets" / "synthia_icon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -71,5 +71,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="Celeste",
+    name="Synthia",
 )

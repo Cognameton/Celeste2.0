@@ -42,7 +42,7 @@ _LLAMA_SERVER_CANDIDATES = [
 ]
 _MODEL_SEARCH_ROOTS = [
     "/media/head-node/ollama-models/models",
-    os.path.join(HOME_DIR, "Celeste", "models"),
+    os.path.join(HOME_DIR, "Synthia", "models"),
     os.path.join(HOME_DIR, "Dev"),
     os.path.join(HOME_DIR, "Downloads"),
     os.path.join(HOME_DIR, "models"),

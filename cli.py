@@ -20,7 +20,7 @@ from model_runner import discover_local_models
 console = Console()
 
 def show_banner():
-    console.print(Panel.fit("Celeste — Offline Reflective Agent", title="Celeste", style="bold"))
+    console.print(Panel.fit("Synthia — Offline Reflective Agent", title="Synthia", style="bold"))
 
 def show_config(cfg: AgentConfig):
     tbl = Table.grid(padding=(0, 2))

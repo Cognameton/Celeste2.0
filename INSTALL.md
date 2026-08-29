@@ -1,4 +1,4 @@
-# Install Celeste
+# Install Synthia
 
 ## What You Need
 
@@ -7,35 +7,35 @@
 - optional CUDA-capable GPU
 - optional Piper install and voice files for TTS
 
-Celeste does not ship with models. You point it at your own local files in `config.yaml`.
+Synthia does not ship with models. You point it at your own local files in `config.yaml`.
 
 ## Quick Bootstrap
 
 Linux:
 
 ```bash
-git clone https://github.com/Cognameton/Celeste.git
-cd Celeste
+git clone https://github.com/Cognameton/Synthia.git
+cd Synthia
 ./scripts/bootstrap_linux.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-git clone https://github.com/Cognameton/Celeste.git
-cd Celeste
+git clone https://github.com/Cognameton/Synthia.git
+cd Synthia
 .\scripts\bootstrap_windows.ps1
 ```
 
-If `config.yaml` does not exist, a first-run wizard opens so you can use Celeste default folders or browse to your own model, embedding, document, and data paths.
+If `config.yaml` does not exist, a first-run wizard opens so you can use Synthia default folders or browse to your own model, embedding, document, and data paths.
 
 ## Manual Setup
 
 ## 1. Clone The Repo
 
 ```bash
-git clone https://github.com/Cognameton/Celeste.git
-cd Celeste
+git clone https://github.com/Cognameton/Synthia.git
+cd Synthia
 ```
 
 ## 2. Create A Virtual Environment
@@ -80,7 +80,7 @@ Make sure your configured model actually exists:
 ls -lh /absolute/path/to/your/model.gguf
 ```
 
-## 6. Launch Celeste
+## 6. Launch Synthia
 
 Desktop UI:
 
@@ -122,7 +122,7 @@ Model file not found:
 
 Stuck on startup:
 
-- Celeste may still be loading the model
+- Synthia may still be loading the model
 - watch the status text in the UI
 
 No semantic retrieval:

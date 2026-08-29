@@ -21,7 +21,7 @@ def resource_path(*parts: str) -> str:
     return os.path.join(resource_root(), *parts)
 
 
-_APP_NAME = "Celeste2"
+_APP_NAME = "Synthia"
 
 
 def _user_data_root() -> str:

@@ -28,35 +28,35 @@ if (!(Test-Path $llamaServer)) {
     throw "Missing $llamaServer. Build llama.cpp first, then rerun this packager."
 }
 
-if (Test-Path (Join-Path $projectRoot "dist\Celeste")) {
-    Remove-Item -Recurse -Force (Join-Path $projectRoot "dist\Celeste")
+if (Test-Path (Join-Path $projectRoot "dist\Synthia")) {
+    Remove-Item -Recurse -Force (Join-Path $projectRoot "dist\Synthia")
 }
 
-Invoke-Checked $python -m PyInstaller packaging\pyinstaller\celeste.spec --noconfirm --clean
+Invoke-Checked $python -m PyInstaller packaging\pyinstaller\synthia.spec --noconfirm --clean
 
-$bundleVendorDir = Join-Path $projectRoot "dist\Celeste\vendor\llama.cpp\build\bin\Release"
+$bundleVendorDir = Join-Path $projectRoot "dist\Synthia\vendor\llama.cpp\build\bin\Release"
 New-Item -ItemType Directory -Force -Path $bundleVendorDir | Out-Null
 Copy-Item -Force (Join-Path $llamaBuildBinDir "*") $bundleVendorDir
 
 $modelsDir = Join-Path $projectRoot "models"
 if (Test-Path $modelsDir) {
-    Copy-Item -Recurse -Force $modelsDir (Join-Path $projectRoot "dist\Celeste\models")
+    Copy-Item -Recurse -Force $modelsDir (Join-Path $projectRoot "dist\Synthia\models")
 }
 
 $embeddingsDir = Join-Path $projectRoot "embeddings"
 if (Test-Path $embeddingsDir) {
-    Copy-Item -Recurse -Force $embeddingsDir (Join-Path $projectRoot "dist\Celeste\embeddings")
+    Copy-Item -Recurse -Force $embeddingsDir (Join-Path $projectRoot "dist\Synthia\embeddings")
 }
 
 $piperDir = Join-Path $projectRoot "piper\windows"
 if (Test-Path $piperDir) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $projectRoot "dist\Celeste\piper") | Out-Null
-    Copy-Item -Recurse -Force $piperDir (Join-Path $projectRoot "dist\Celeste\piper\windows")
+    New-Item -ItemType Directory -Force -Path (Join-Path $projectRoot "dist\Synthia\piper") | Out-Null
+    Copy-Item -Recurse -Force $piperDir (Join-Path $projectRoot "dist\Synthia\piper\windows")
 }
 
 $voicesDir = Join-Path $projectRoot "voices"
 if (Test-Path $voicesDir) {
-    Copy-Item -Recurse -Force $voicesDir (Join-Path $projectRoot "dist\Celeste\voices")
+    Copy-Item -Recurse -Force $voicesDir (Join-Path $projectRoot "dist\Synthia\voices")
 }
 
 $isccCommand = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
@@ -76,7 +76,7 @@ if ($null -ne $isccCommand) {
 }
 
 if ($null -ne $isccPath) {
-    Invoke-Checked $isccPath (Join-Path $projectRoot "packaging\windows\celeste.iss")
+    Invoke-Checked $isccPath (Join-Path $projectRoot "packaging\windows\synthia.iss")
 } else {
-    Write-Host "ISCC.exe not found. Generated dist\Celeste onedir bundle, but skipped .exe installer creation."
+    Write-Host "ISCC.exe not found. Generated dist\Synthia onedir bundle, but skipped .exe installer creation."
 }

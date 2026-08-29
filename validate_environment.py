@@ -168,8 +168,8 @@ def has_errors(checks: Iterable[ValidationCheck]) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate a Celeste config.yaml before launch.")
-    parser.add_argument("--config", default="config.yaml", help="Path to the Celeste config file.")
+    parser = argparse.ArgumentParser(description="Validate a Synthia config.yaml before launch.")
+    parser.add_argument("--config", default="config.yaml", help="Path to the Synthia config file.")
     args = parser.parse_args()
 
     checks = validate_config_file(args.config)

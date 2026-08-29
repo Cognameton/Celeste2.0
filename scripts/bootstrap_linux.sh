@@ -23,7 +23,7 @@ if [ ! -x "$LLAMA_SERVER" ] && ! command -v llama-server >/dev/null 2>&1; then
   else
     cmake -S "$PROJECT_ROOT/vendor/llama.cpp" -B "$PROJECT_ROOT/vendor/llama.cpp/build" -DLLAMA_CURL=OFF
   fi
-  cmake --build "$PROJECT_ROOT/vendor/llama.cpp/build" --config Release -j "${CELESTE_BUILD_JOBS:-$(nproc)}"
+  cmake --build "$PROJECT_ROOT/vendor/llama.cpp/build" --config Release -j "${SYNTHIA_BUILD_JOBS:-$(nproc)}"
 fi
 
 if [ ! -f "$PROJECT_ROOT/config.yaml" ]; then

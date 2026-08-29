@@ -1,14 +1,14 @@
-# Packaging Celeste
+# Packaging Synthia
 
-Celeste now has two install paths:
+Synthia now has two install paths:
 
 - **Source/developer mode**: clone the repo, use `.venv`, and run `python desktop_app.py`.
 - **Packaged/end-user mode**: build a native app bundle with PyInstaller and ship a Windows installer or Linux AppImage/tarball.
 
-Your current local `config.yaml` workflow is preserved. When Celeste runs from source, it still uses the repo-local `config.yaml`. When it runs as a packaged executable, it stores config in a user-writable location:
+Your current local `config.yaml` workflow is preserved. When Synthia runs from source, it still uses the repo-local `config.yaml`. When it runs as a packaged executable, it stores config in a user-writable location:
 
-- Windows: `%LOCALAPPDATA%\Celeste\config.yaml`
-- Linux: `~/.config/Celeste/config.yaml` unless `XDG_CONFIG_HOME` is set
+- Windows: `%LOCALAPPDATA%\Synthia\config.yaml`
+- Linux: `~/.config/Synthia/config.yaml` unless `XDG_CONFIG_HOME` is set
 
 ## Dependency Split
 
@@ -35,8 +35,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 Outputs:
 
-- `dist\Celeste\` onedir app bundle
-- `dist\installer\Celeste-Setup-0.1.0.exe` if Inno Setup is installed
+- `dist\Synthia\` onedir app bundle
+- `dist\installer\Synthia-Setup-0.1.0.exe` if Inno Setup is installed
 
 ## Linux Build
 
@@ -54,13 +54,13 @@ Build:
 
 Outputs:
 
-- `dist/Celeste/` onedir app bundle
-- `dist/packages/Celeste-linux-x86_64.tar.gz`
-- `dist/packages/Celeste-x86_64.AppImage` if `appimagetool` is installed
+- `dist/Synthia/` onedir app bundle
+- `dist/packages/Synthia-linux-x86_64.tar.gz`
+- `dist/packages/Synthia-x86_64.AppImage` if `appimagetool` is installed
 
 ## First-Run Setup
 
-If no `config.yaml` exists in the packaged app's user config directory, Celeste opens the setup wizard and asks for:
+If no `config.yaml` exists in the packaged app's user config directory, Synthia opens the setup wizard and asks for:
 
 - GGUF model path
 - embedding model path
@@ -69,7 +69,7 @@ If no `config.yaml` exists in the packaged app's user config directory, Celeste 
 - data/vector DB paths
 - optional Piper TTS paths
 
-The wizard offers default Celeste folders but also lets the user browse to custom paths.
+The wizard offers default Synthia folders but also lets the user browse to custom paths.
 
 ## Optional Bundled Runtime Assets
 
@@ -101,7 +101,7 @@ piper/
     ...
 ```
 
-The packaging scripts copy these folders into `dist/Celeste/` if present:
+The packaging scripts copy these folders into `dist/Synthia/` if present:
 
 - `models/`
 - `embeddings/`

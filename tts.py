@@ -1,5 +1,5 @@
 """
-tts.py — minimal synchronous text-to-speech helpers for Celeste.
+tts.py — minimal synchronous text-to-speech helpers for Synthia.
 
 This module intentionally avoids background workers, persistent Piper sessions,
 and streaming chunk assembly. A reply is synthesized and played in one

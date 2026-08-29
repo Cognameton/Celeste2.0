@@ -1,7 +1,7 @@
-#define MyAppName "Celeste"
+#define MyAppName "Synthia"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "Cognameton"
-#define MyAppExeName "Celeste.exe"
+#define MyAppExeName "Synthia.exe"
 
 [Setup]
 AppId={{A57E6339-10B6-4B75-9075-4F95F79642A8}
@@ -11,8 +11,8 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\..\dist\installer
-OutputBaseFilename=Celeste-Setup-{#MyAppVersion}
-SetupIconFile=..\..\assets\celeste_icon.ico
+OutputBaseFilename=Synthia-Setup-{#MyAppVersion}
+SetupIconFile=..\..\assets\synthia_icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -22,7 +22,7 @@ RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\..\dist\Celeste\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\dist\Synthia\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -32,4 +32,4 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch Celeste"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch Synthia"; Flags: nowait postinstall skipifsilent

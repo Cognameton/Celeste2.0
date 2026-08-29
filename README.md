@@ -1,6 +1,6 @@
-# Celeste
+# Synthia
 
-Celeste is a local-first desktop AI assistant with:
+Synthia is a local-first desktop AI assistant with:
 
 - interchangeable local LLM backends
 - vector memory
@@ -40,7 +40,7 @@ cp config.example.yaml config.yaml
 python desktop_app.py
 ```
 
-If `config.yaml` does not exist, Celeste now opens a first-run setup wizard before launching.
+If `config.yaml` does not exist, Synthia now opens a first-run setup wizard before launching.
 
 ### Bootstrap scripts
 
@@ -56,7 +56,7 @@ Fresh Windows install from PowerShell:
 .\scripts\bootstrap_windows.ps1
 ```
 
-These scripts create `.venv`, install Python dependencies, build `vendor/llama.cpp` if no `llama-server` is available, run the setup wizard when `config.yaml` is missing, validate the environment, and then launch Celeste.
+These scripts create `.venv`, install Python dependencies, build `vendor/llama.cpp` if no `llama-server` is available, run the setup wizard when `config.yaml` is missing, validate the environment, and then launch Synthia.
 
 ## Notes
 

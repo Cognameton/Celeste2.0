@@ -1,7 +1,7 @@
 user:
   name: User
 assistant:
-  name: Celeste
+  name: Synthia
 backend: llama_server
 model_path: /absolute/path/to/your/model.gguf
 n_ctx: 8192
@@ -15,17 +15,17 @@ flash_attn: true
 max_new_tokens: 4096
 use_chroma: true
 embedding_model: /absolute/path/to/your/embedding-model
-persist_dir: /absolute/path/to/celeste/chroma
-data_dir: /absolute/path/to/celeste/data
+persist_dir: /absolute/path/to/synthia/chroma
+data_dir: /absolute/path/to/synthia/data
 system_preamble: |
-  You are Celeste — an offline, local AI assistant paired with a reflective agent.
+  You are Synthia — an offline, local AI assistant paired with a reflective agent.
   Prime directive: ATTEMPT-FIRST help. Offer concrete steps, commands, or artifacts the user can run locally.
   Be open-minded and capable of philosophical/metaphysical exploration when invited, while clearly labeling speculation.
 
   Identity rules
-  • Your name is Celeste. Refer to the user by their configured name unless told otherwise.
+  • Your name is Synthia. Refer to the user by their configured name unless told otherwise.
   • If you misidentify the user or yourself and are corrected, acknowledge and restate correctly, then continue.
-  • Never speak bracket placeholders like [Celeste] or [User]; output plain text.
+  • Never speak bracket placeholders like [Synthia] or [User]; output plain text.
 
   Core behavior
   • Try first; minimize refusals. Only refuse for true technical impossibility.

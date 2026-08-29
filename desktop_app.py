@@ -42,11 +42,11 @@ try:
     )
 except ImportError as exc:  # pragma: no cover - runtime dependency
     raise SystemExit(
-        "PySide6 is not installed. Install it in the Celeste venv with:\n"
+        "PySide6 is not installed. Install it in the Synthia venv with:\n"
         "  pip install PySide6"
     ) from exc
 
-from app_service import CelesteService
+from app_service import SynthiaService
 from config_types import AgentConfig
 from app_paths import default_config_path, resource_path
 from model_runner import discover_models_in_dir
@@ -308,7 +308,7 @@ class ServiceWorker(QObject):
 
     def __init__(self, config_path: str):
         super().__init__()
-        self.service = CelesteService(config_path)
+        self.service = SynthiaService(config_path)
         self._chat_thread: threading.Thread | None = None
         self._reload_thread: threading.Thread | None = None
         self._deep_index_thread: threading.Thread | None = None
@@ -318,14 +318,14 @@ class ServiceWorker(QObject):
     def initialize(self) -> None:
         try:
             logging.info("Worker initialize requested.")
-            self.status.emit("Starting Celeste backend...")
+            self.status.emit("Starting Synthia backend...")
             cfg = self.service.start(status_cb=self.status.emit)
             self.service.set_reflection_flag_cb(lambda reason: self.rulebook_flagged.emit(reason))
             self.service.set_activity_cb(lambda msg: self.agent_event.emit(msg))
             self.initialized.emit(cfg)
-            self.status.emit("Celeste ready.")
+            self.status.emit("Synthia ready.")
         except Exception as exc:
-            logging.exception("Celeste backend initialization failed")
+            logging.exception("Synthia backend initialization failed")
             self.failed.emit(str(exc))
 
     @Slot()
@@ -419,7 +419,7 @@ class ServiceWorker(QObject):
 
         data = dict(overrides) if isinstance(overrides, dict) else {}
         logging.info("Worker reload requested (persist=%s).", persist)
-        self.status.emit("Reloading Celeste with updated settings...")
+        self.status.emit("Reloading Synthia with updated settings...")
 
         def _run_reload() -> None:
             try:
@@ -577,7 +577,7 @@ class ServiceWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class CelesteWindow(QMainWindow):
+class SynthiaWindow(QMainWindow):
     initialize_requested = Signal()
     load_models_requested = Signal()
     send_requested = Signal(str)
@@ -606,8 +606,8 @@ class CelesteWindow(QMainWindow):
         self.initialize_requested.emit()
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Celeste")
-        icon_path = resource_path("assets", "celeste_icon.png")
+        self.setWindowTitle("Synthia")
+        icon_path = resource_path("assets", "synthia_icon.png")
         if os.path.isfile(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         screen = QApplication.primaryScreen()
@@ -726,7 +726,7 @@ class CelesteWindow(QMainWindow):
         self.persona_button = QPushButton("Edit Persona")
         self.live_log_button = QPushButton("Live Log")
         self.live_log_button.setCheckable(True)
-        self.shutdown_button = QPushButton("Shutdown Celeste")
+        self.shutdown_button = QPushButton("Shutdown Synthia")
         for button in (
             self.reload_button,
             self.refresh_models_button,
@@ -959,7 +959,7 @@ class CelesteWindow(QMainWindow):
         self.activity_log.setFont(QFont("DejaVu Sans Mono", 9))
 
         self.log_dialog = LiveLogDialog(self)
-        self.log_dialog.setWindowTitle("Celeste Live Log")
+        self.log_dialog.setWindowTitle("Synthia Live Log")
         self.log_dialog.resize(980, 520)
         self.log_dialog.setModal(False)
         dialog_layout = QVBoxLayout(self.log_dialog)
@@ -992,7 +992,7 @@ class CelesteWindow(QMainWindow):
         self.log_dialog.closed.connect(self._on_log_dialog_closed)
         self.deep_index_dialog.canceled.connect(self._shutdown_app)
 
-        self._set_busy(True, "Starting Celeste...")
+        self._set_busy(True, "Starting Synthia...")
         self.setStyleSheet(
             """
             QWidget {
@@ -1191,8 +1191,8 @@ class CelesteWindow(QMainWindow):
             self._populate_from_config(self.cfg)
         if self.chat_view.toPlainText().strip():
             self._append_session_separator()
-        self._append_system("Celeste backend is online.")
-        self._set_busy(False, "Celeste ready.")
+        self._append_system("Synthia backend is online.")
+        self._set_busy(False, "Synthia ready.")
 
     @Slot(object)
     def _on_reloaded(self, cfg: object) -> None:
@@ -1319,7 +1319,7 @@ class CelesteWindow(QMainWindow):
         self._hide_stream_preview()
         self._append_system(f"Error: {message}")
         self._set_busy(False, "Error.")
-        QMessageBox.critical(self, "Celeste Error", message)
+        QMessageBox.critical(self, "Synthia Error", message)
 
     @Slot(str)
     def _on_agent_event(self, msg: str) -> None:
@@ -1361,7 +1361,7 @@ class CelesteWindow(QMainWindow):
         plain = self.chat_view.toPlainText().strip()
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(f"# Celeste Conversation Export\n")
+                f.write(f"# Synthia Conversation Export\n")
                 f.write(f"_{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_\n\n")
                 f.write(plain)
             self._append_system(f"Conversation exported to {os.path.basename(path)}")
@@ -1651,7 +1651,7 @@ class CelesteWindow(QMainWindow):
         if self._busy_reason == "deep_index":
             reply = QMessageBox.question(
                 self,
-                "Force Shutdown Celeste",
+                "Force Shutdown Synthia",
                 "Deep indexing is running. Force shutdown now? The partial deep-index build will be discarded.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -1663,8 +1663,8 @@ class CelesteWindow(QMainWindow):
         if self.busy:
             reply = QMessageBox.question(
                 self,
-                "Shutdown Celeste",
-                "Celeste is busy. Shut it down anyway?",
+                "Shutdown Synthia",
+                "Synthia is busy. Shut it down anyway?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1673,21 +1673,21 @@ class CelesteWindow(QMainWindow):
         else:
             reply = QMessageBox.question(
                 self,
-                "Shutdown Celeste",
-                "Shut Celeste down now?",
+                "Shutdown Synthia",
+                "Shut Synthia down now?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
                 return
-        self._set_busy(True, "Shutting down Celeste...")
+        self._set_busy(True, "Shutting down Synthia...")
         self.close()
 
     def _force_terminate_app(self, reason: str) -> None:
         logging.warning(reason)
         self._force_quit = True
         self._hide_progress_ui()
-        self.status_label.setText("Force shutting down Celeste...")
+        self.status_label.setText("Force shutting down Synthia...")
         try:
             service = getattr(self.worker, "service", None)
             agent = getattr(service, "agent", None)
@@ -1735,10 +1735,10 @@ def main() -> int:
     config_path = default_config_path()
     log_path = _setup_app_logging(config_path)
     _install_exception_logging()
-    logging.info("Launching Celeste desktop app")
+    logging.info("Launching Synthia desktop app")
     logging.info("Desktop log path: %s", log_path)
     app = QApplication(sys.argv)
-    icon_path = resource_path("assets", "celeste_icon.png")
+    icon_path = resource_path("assets", "synthia_icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     if not os.path.exists(config_path):
@@ -1746,7 +1746,7 @@ def main() -> int:
 
         if not ensure_config_with_wizard(config_path, app=app):
             return 0
-    window = CelesteWindow(config_path)
+    window = SynthiaWindow(config_path)
     window.show()
     return app.exec()
 

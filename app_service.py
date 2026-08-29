@@ -8,7 +8,7 @@ from model_runner import discover_local_models, normalize_path
 from graph_facts import record_deep_index_graph_facts
 
 
-class CelesteService:
+class SynthiaService:
     def __init__(self, config_path: str):
         self.config_path = os.path.abspath(config_path)
         self.cfg: AgentConfig = load_config(self.config_path)
@@ -29,7 +29,7 @@ class CelesteService:
     ) -> AgentConfig:
         next_cfg = load_config(self.config_path)
         if status_cb:
-            status_cb("Loading Celeste configuration...")
+            status_cb("Loading Synthia configuration...")
         if overrides:
             updated = next_cfg.model_dump()
             updated.update(overrides)

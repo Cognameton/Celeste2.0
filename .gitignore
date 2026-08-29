@@ -23,3 +23,6 @@ self/
 *.json.gz
 
 .DS_Store
+
+# runtime logs
+*_desktop.log

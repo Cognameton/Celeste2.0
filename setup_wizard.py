@@ -31,7 +31,7 @@ try:
     )
 except ImportError as exc:  # pragma: no cover - runtime dependency
     raise SystemExit(
-        "PySide6 is required for the Celeste setup wizard. Install dependencies first:\n"
+        "PySide6 is required for the Synthia setup wizard. Install dependencies first:\n"
         "  pip install -r requirements.txt"
     ) from exc
 
@@ -49,7 +49,7 @@ def _template_path() -> str:
 
 def _default_paths() -> dict[str, str]:
     home = os.path.expanduser("~")
-    celeste_home = os.path.join(home, "Celeste")
+    synthia_home = os.path.join(home, "Synthia")
     bundled_model = _bundled_default_model_path()
     bundled_embedding = _bundled_default_embedding_dir()
     bundled_llama = _bundled_llama_server_path()
@@ -57,8 +57,8 @@ def _default_paths() -> dict[str, str]:
     bundled_voice_model = _bundled_piper_voice_model()
     bundled_voice_config = _bundled_piper_voice_config()
     return {
-        "model_path": bundled_model or os.path.join(celeste_home, "models", "default.gguf"),
-        "embedding_model": bundled_embedding or os.path.join(celeste_home, "embeddings", "e5-small-v2"),
+        "model_path": bundled_model or os.path.join(synthia_home, "models", "default.gguf"),
+        "embedding_model": bundled_embedding or os.path.join(synthia_home, "embeddings", "e5-small-v2"),
         "llama_server_executable": bundled_llama or os.path.join(
             _project_root(),
             "vendor",
@@ -67,11 +67,11 @@ def _default_paths() -> dict[str, str]:
             "bin",
             "llama-server.exe" if os.name == "nt" else "llama-server",
         ),
-        "data_dir": os.path.join(celeste_home, "data"),
-        "persist_dir": os.path.join(celeste_home, "chroma"),
-        "file_rag_dir": os.path.join(celeste_home, "library"),
-        "tts_piper_model": bundled_voice_model or os.path.join(celeste_home, "voices", "voice.onnx"),
-        "tts_piper_config": bundled_voice_config or os.path.join(celeste_home, "voices", "voice.onnx.json"),
+        "data_dir": os.path.join(synthia_home, "data"),
+        "persist_dir": os.path.join(synthia_home, "chroma"),
+        "file_rag_dir": os.path.join(synthia_home, "library"),
+        "tts_piper_model": bundled_voice_model or os.path.join(synthia_home, "voices", "voice.onnx"),
+        "tts_piper_config": bundled_voice_config or os.path.join(synthia_home, "voices", "voice.onnx.json"),
         "tts_piper_executable": bundled_piper or "piper",
     }
 
@@ -144,8 +144,8 @@ class SetupWizardDialog(QDialog):
         self.template = _load_template(template_path)
         self.defaults = _default_paths()
         self.inputs: dict[str, QLineEdit] = {}
-        self.setWindowTitle("Celeste First-Run Setup")
-        icon_path = resource_path("assets", "celeste_icon.png")
+        self.setWindowTitle("Synthia First-Run Setup")
+        icon_path = resource_path("assets", "synthia_icon.png")
         if os.path.isfile(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         self.resize(900, 760)
@@ -153,7 +153,7 @@ class SetupWizardDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        title = QLabel("Celeste Setup Wizard")
+        title = QLabel("Synthia Setup Wizard")
         title.setStyleSheet("font-size: 22px; font-weight: 700;")
         layout.addWidget(title)
 
@@ -164,7 +164,7 @@ class SetupWizardDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        use_defaults = QPushButton("Use Default Celeste Folders")
+        use_defaults = QPushButton("Use Default Synthia Folders")
         use_defaults.clicked.connect(self._apply_default_paths)
         layout.addWidget(use_defaults, alignment=Qt.AlignLeft)
 
@@ -338,7 +338,7 @@ class SetupWizardDialog(QDialog):
     def _save_config(self) -> None:
         valid = self._validate_current_settings()
         if valid:
-            QMessageBox.information(self, "Celeste Setup", f"Configuration saved to:\n{self.config_path}")
+            QMessageBox.information(self, "Synthia Setup", f"Configuration saved to:\n{self.config_path}")
             self.accept()
             return
         reply = QMessageBox.question(
@@ -361,7 +361,7 @@ def ensure_config_with_wizard(config_path: str, *, app: QApplication | None = No
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create a Celeste config.yaml with a first-run setup wizard.")
+    parser = argparse.ArgumentParser(description="Create a Synthia config.yaml with a first-run setup wizard.")
     parser.add_argument(
         "--config",
         default=default_config_path(),
@@ -380,7 +380,7 @@ def main() -> int:
         return 0
 
     app = QApplication.instance() or QApplication(sys.argv)
-    icon_path = resource_path("assets", "celeste_icon.png")
+    icon_path = resource_path("assets", "synthia_icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     dialog = SetupWizardDialog(config_path)
