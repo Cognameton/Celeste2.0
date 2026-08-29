@@ -95,7 +95,7 @@ class LiveLogDialog(QDialog):
 def _setup_app_logging(config_path: str) -> str:
     config_dir = os.path.dirname(os.path.abspath(config_path))
     os.makedirs(config_dir, exist_ok=True)
-    log_path = os.path.join(config_dir, "celeste_desktop.log")
+    log_path = os.path.join(config_dir, "synthia_desktop.log")
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
@@ -594,7 +594,7 @@ class SynthiaWindow(QMainWindow):
     def __init__(self, config_path: str):
         super().__init__()
         self.config_path = config_path
-        self.log_path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "celeste_desktop.log")
+        self.log_path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "synthia_desktop.log")
         self.cfg: AgentConfig | None = None
         self.busy = False
         self._busy_reason: str | None = None
