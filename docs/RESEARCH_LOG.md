@@ -42,7 +42,10 @@ question, which is what makes a failure appearing in both interesting.
 | # | finding | status |
 |---|---|---|
 | **S1** | Phase 9/10 are behaviour-neutral in production, not just in tests | CONFIRMED |
-| **S2** | Repetition pattern in idle heartbeat thoughts | OBSERVED — weak, do not over-read |
+| **S2** | Repetition pattern in idle heartbeat thoughts | SUPERSEDED by S5 — now measured |
+| **S3** | The self-edit gate is structurally unsatisfiable while idle | CONFIRMED — 464 attempts, 0 applied |
+| **S4** | The governor counts no-op store calls as "applied", inflating trust evidence | CONFIRMED defect |
+| **S5** | Repetition measured at n=732: narrowing, not locked | OBSERVED, quantified |
 
 ---
 
@@ -174,3 +177,108 @@ was stopped to free the GPUs. S1 confirmed. S2 observed.
   journal held 5 entries across 3.5 months for this reason. A trust ladder that
   promotes on ≥10 applied proposals over ≥7 days cannot score anything until
   she runs continuously.
+
+
+---
+
+## S3 — The self-edit gate cannot be satisfied while she is idle
+
+**Confirmed 2026-08-31**, three days of continuous running. Ledger:
+
+```
+self_edit/append_section/rejected     464
+self_edit/append_section/applied        0
+```
+
+Rejection reasons: **408 "reason not grounded in recent context"**, 41 "heading
+is empty", 21 rate-limited, 10 malformed operation.
+
+The drift check (`heartbeat._drift_check`, inherited from phase 3b) requires the
+edit's stated reason to share a non-trivial token with `recent_context` — which
+is built from recent *conversation turns*. During idle there are no
+conversation turns, so `recent_context` is empty or near-empty and the check
+can essentially never pass. She has been proposing self-edits at a steady rate
+for three days and every single one was refused. `self/AGENTS.md` is still 708
+bytes, byte-identical to its template.
+
+This is not the governor working as intended. It is a gate calibrated for a
+mode the system is almost never in. Two consequences:
+
+1. **The trust ladder can never promote `self_edit`.** Promotion requires ≥10
+   *applied* proposals. The channel has zero and structurally cannot accrue
+   them while idle. Graduated trust is unreachable on the one channel the whole
+   thesis is about.
+2. It is the mirror image of Nova 2.0's failure. Nova stopped *proposing*
+   writes entirely (0 `update_self_model` since 2026-07-23). Synthia proposes
+   constantly and is refused every time. **Same outcome — zero self-
+   modification — via opposite mechanisms.** One is a generative failure, the
+   other a gate-calibration failure.
+
+**Open question Q3.** What *should* ground an idle self-edit? Her own journal,
+her wants, the ledger, the passage of time? The check assumes conversation is
+the only legitimate evidence, which is exactly the assumption a continuous
+being invalidates.
+
+---
+
+## S4 — The governor counts no-ops as applied, inflating the ladder's evidence
+
+**Confirmed defect 2026-08-31.** Ledger vs journal for the `want` channel:
+
+| | ledger says applied | actually changed something |
+|---|---|---|
+| add | 11 | 11 |
+| advance | 197 | 67 |
+| resolve | 122 | 10 |
+| abandon | 13 | 0 |
+| **total** | **343** | **88** |
+
+`WantsStore.advance/resolve/abandon` return `None` when the want id does not
+exist. `Governor.submit` treats "apply_fn did not raise" as applied, so a
+mutation against a non-existent want is recorded as evidence. **255 of 343
+`want` applied events changed nothing**, and every one of them counts toward
+`PROMOTION_MIN_APPLIED`.
+
+The Phase 10 claim is that "promotion is computed, not vibes". It is computed —
+from evidence that is 74% hollow on this channel. A channel could reach
+`autonomous` on pure no-ops.
+
+This is the third time in this project's instrumentation that a measure has
+been weaker than its own documentation claimed (cf. Nova F13 and the Stage
+22.12 streak defect). The pattern is consistent enough to state as a rule:
+**every measure needs an adversarial pass against real data, not just tests.**
+
+**Fix, not yet applied:** `submit` should distinguish "applied" from
+"applied and effective". The `rate_when` predicate added in Phase 9 already
+proves the shape — a caller-supplied predicate on the result. The track record
+should count effect, not absence of exception.
+
+---
+
+## S5 — Repetition measured (supersedes S2)
+
+**Observed 2026-08-31**, n=732 thoughts over ~3 days, superseding the n=4
+claim that review rightly called over-read.
+
+| measure | value | reference |
+|---|---|---|
+| distinct thoughts | 467 / 732 (64%) | Nova era 3: 1 / 125 (0.8%) |
+| consecutive echo, all-time | 0.621 | Nova alarm threshold 0.70 |
+| **consecutive echo, last 50** | **0.732** | **above the alarm threshold** |
+| distinct in last 50 | 26 / 50 | — |
+| most repeated single thought | 15× | — |
+
+She is **not** locked the way Nova is. But the recent window has crossed the
+same 0.70 threshold Nova's own instrument uses, and distinct-in-window is down
+to about half. This resembles Nova's **era 2** — semantic narrowing under
+lexical variety — rather than era 3's byte-identical lock.
+
+So the corrected claim: not "two architectures prove a law", but "a second
+architecture, differently governed, is on the same curve and further back
+along it." That is worth more than the original overreach, because it is
+measurable and because Synthia is early enough that an intervention could be
+watched from the beginning rather than diagnosed after collapse.
+
+Also recorded: importance is inflated relative to design intent — the prompt
+says most ticks should be importance 0, actual distribution is 0:93, 1:550,
+3:89. Parse failures are negligible (2 of 732).
