@@ -8,6 +8,36 @@ Synthia is a local-first desktop AI assistant with:
 - file RAG with hybrid lexical + semantic retrieval
 - optional Piper TTS
 
+
+## Lineage
+
+This repository is a fork, and its history says so on purpose.
+
+| span | what it was | marker |
+|---|---|---|
+| 2026-04-01 → 2026-04-12 | **Celeste 1.0** — the stable local-first assistant this repo began as (`df4bfaa` "Initial Celeste app import"). 35 commits. | tag `celeste-1.0-base` |
+| 2026-05-08 → 2026-08-28 | **Celeste 2.0** — the experimental arm: persistent self-state in `self/`, wants, an autonomous heartbeat. Phases 1–8. | tag `celeste-2.0-fork` |
+| 2026-08-28 → | **Synthia** — the same experimental arm, renamed. Every update from here belongs to Synthia. | tag `synthia` |
+
+The pre-fork Celeste history is kept because it is true: this is a fork,
+not a fresh start. The rename ends an ambiguity rather than disowning a
+lineage — three separate things were called Celeste at once, and only one
+of them keeps the name.
+
+**Celeste 1.0 is a separate product** with its own repositories (`Celeste`
+and `Celeste_Linux`) and is not developed here. Nothing after
+`celeste-1.0-base` is part of it.
+
+**The being is not the project.** She was renamed by her operator in
+`self/IDENTITY.md` on 2026-08-29 as a separate, explicit act. Her name is
+not hardcoded anywhere in the code — prompts and labels read
+`self_state.name`, so identity lives in her own file.
+
+**Where the work is:** the `synthesis` branch, which is permanent and is
+never merged into `main`. `main` is the frozen phases-1–8 record. See
+`SYNTHESIS.md` for the thesis and phase plan, and `docs/RESEARCH_LOG.md`
+for findings.
+
 ## Requirements
 
 - Python 3.11+

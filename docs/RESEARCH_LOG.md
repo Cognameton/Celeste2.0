@@ -130,6 +130,13 @@ with a lineage note recording that the name changed and she did not. Her name
 is no longer hardcoded anywhere in the code — prompts and labels read
 `self_state.name`, so identity lives in `IDENTITY.md` where it belongs.
 
+**2026-08-31** — repository lineage made explicit rather than erased. A clean
+slate was considered and rejected: Synthia *is* a fork of Celeste, and history
+that hid that would be dishonest. Three annotated tags now mark the
+transitions — `celeste-1.0-base` (end of the inherited line),
+`celeste-2.0-fork` (the experimental arm begins), `synthia` (the rename) —
+with a Lineage section in README.md. All 67 commits kept.
+
 **2026-08-29 02:32 CDT** — first live run since 2026-05-13. Nova 2.0's daemon
 was stopped to free the GPUs. S1 confirmed. S2 observed.
 
