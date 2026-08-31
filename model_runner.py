@@ -27,8 +27,8 @@ _FLASH_ATTN_MODE_CACHE: dict[str, str] = {}
 _LLAMA_CPP_LIB_CANDIDATES = [
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "libllama.so"),
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "src", "libllama.so"),
-    "/home/head-node/Dev/ai-lab/llama.cpp/build/bin/libllama.so",
-    "/home/head-node/ai-lab/llama.cpp/build/bin/libllama.so",
+    os.path.join(HOME_DIR, "Dev", "ai-lab", "llama.cpp", "build", "bin", "libllama.so"),
+    os.path.join(HOME_DIR, "ai-lab", "llama.cpp", "build", "bin", "libllama.so"),
 ]
 _LLAMA_CPP_BIN_DIR_CANDIDATES = [
     os.path.dirname(path) for path in _LLAMA_CPP_LIB_CANDIDATES
@@ -37,11 +37,11 @@ _LLAMA_SERVER_CANDIDATES = [
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "llama-server"),
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "Release", "llama-server.exe"),
     os.path.join(PROJECT_ROOT, "vendor", "llama.cpp", "build", "bin", "llama-server.exe"),
-    "/home/head-node/Dev/ai-lab/llama.cpp/build/bin/llama-server",
-    "/home/head-node/ai-lab/llama.cpp/build/bin/llama-server",
+    os.path.join(HOME_DIR, "Dev", "ai-lab", "llama.cpp", "build", "bin", "llama-server"),
+    os.path.join(HOME_DIR, "ai-lab", "llama.cpp", "build", "bin", "llama-server"),
 ]
 _MODEL_SEARCH_ROOTS = [
-    "/media/head-node/ollama-models/models",
+    os.path.join("/media", os.path.basename(HOME_DIR), "ollama-models", "models"),
     os.path.join(HOME_DIR, "Synthia", "models"),
     os.path.join(HOME_DIR, "Dev"),
     os.path.join(HOME_DIR, "Downloads"),

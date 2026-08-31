@@ -173,7 +173,7 @@ Packaged config paths:
 
 ## Branch Strategy
 
-- `main` — frozen record of phases 1–8. Not a merge target for this research arm.
+- `main` — frozen record of phases 1–8. Not a merge target for this research arm. **Local only from 2026-08-31**: removed from the GitHub remote, where it served a stale 792-file showcase tree (733 of them product payload) as the default landing. Nothing was lost — every commit on it is an ancestor of `synthesis` and is reachable there and from the lineage tags.
 - `synthesis` — the permanent home of SYNTHESIS.md phases 9–13. **Do not merge it into `main`** (Shane, 2026-08-28): this fork remains its own project, separate from the shipped $49 product line.
 - Phases land as commits on `synthesis`. Pushing to GitHub is a separate, explicit decision — the local repo is the source of truth.
 - (`windows/installer-troubleshooting` was the 1.0-era Windows branch; Windows packaging now lives with Celeste 1.0)

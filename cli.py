@@ -148,7 +148,7 @@ def main():
         console.print("[bold red]Model file not found.[/bold red]")
         console.print(f"Configured `model_path`: {cfg.model_path}")
         console.print(
-            "Update /home/head-node/Dev/ai-lab/synthia/config.yaml "
+            "Update `config.yaml` in the project root "
             "or set `SYNTHIA_MODEL_PATH` before launching."
         )
         candidates = discover_local_models(limit=8)

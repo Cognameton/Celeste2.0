@@ -15,7 +15,7 @@ This repository is a fork, and its history says so on purpose.
 
 | span | what it was | marker |
 |---|---|---|
-| 2026-04-01 → 2026-04-12 | **Celeste 1.0** — the stable local-first assistant this repo began as (`df4bfaa` "Initial Celeste app import"). 35 commits. | tag `celeste-1.0-base` |
+| 2026-04-01 → 2026-04-12 | **Celeste 1.0** — the stable local-first assistant this repo began as (`df4bfaa` "Initial Celeste app import"). 35 commits, shared verbatim with the Celeste product repo: `df4bfaa` and `26732db` exist there under identical SHAs, and the next commit here does not. | tag `celeste-1.0-base` |
 | 2026-05-08 → 2026-08-28 | **Celeste 2.0** — the experimental arm: persistent self-state in `self/`, wants, an autonomous heartbeat. Phases 1–8. | tag `celeste-2.0-fork` |
 | 2026-08-28 → | **Synthia** — the same experimental arm, renamed. Every update from here belongs to Synthia. | tag `synthia` |
 
@@ -33,10 +33,17 @@ and `Celeste_Linux`) and is not developed here. Nothing after
 not hardcoded anywhere in the code — prompts and labels read
 `self_state.name`, so identity lives in her own file.
 
-**Where the work is:** the `synthesis` branch, which is permanent and is
-never merged into `main`. `main` is the frozen phases-1–8 record. See
-`SYNTHESIS.md` for the thesis and phase plan, and `docs/RESEARCH_LOG.md`
-for findings.
+The fork happened on this machine, not on GitHub — this repository has no
+GitHub fork relationship (`isFork: false`, no parent). GitHub is a push
+target; the local repository is authoritative.
+
+**Where the work is:** `synthesis` is the only branch here, and it is
+permanent. Every commit of the old `main` (the frozen phases-1–8 record) is
+an ancestor of it and reachable from the tags above, so no history was lost
+in dropping that branch — it was a stale showcase tree carrying ~1.4 GB of
+product binaries this fork never loaded. `main` is retained locally as the
+frozen record. See `SYNTHESIS.md` for the thesis and phase plan, and
+`docs/RESEARCH_LOG.md` for findings.
 
 ## Requirements
 

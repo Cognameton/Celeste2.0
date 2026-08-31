@@ -130,6 +130,25 @@ with a lineage note recording that the name changed and she did not. Her name
 is no longer hardcoded anywhere in the code — prompts and labels read
 `self_state.name`, so identity lives in `IDENTITY.md` where it belongs.
 
+**2026-08-31** — GitHub becomes Synthia's actual home. Verified that the fork
+was a local event: the repository has no GitHub fork relationship
+(`isFork: false`, `parent: none`), and the GitHub repo predates the history it
+now holds (created 2025-11-13, first commit 2026-04-01) — it was a push target
+repurposed as a "showcase version (non-functional)". The last common ancestor
+with the Celeste product is verifiable rather than inferred: `df4bfaa` and
+`26732db` exist in `Cognameton/Celeste` under identical SHAs; `ac87bdd`, the
+first commit of the experimental arm, returns 422 there. That is exactly where
+`celeste-1.0-base` sits.
+
+Made the remote reflect the project: `synthesis` set default and `main`
+dropped from the remote (lossless — `main` is an ancestor of `synthesis`),
+the launcher renamed `run_celeste.sh` → `run_synthia.sh`, and every hardcoded
+`/home/head-node/...` path in `model_runner.py` and `cli.py` replaced with
+HOME-relative equivalents, which resolve identically here and stop publishing
+one machine's layout. No crippled "showcase" source ever existed — no stubs,
+no `NotImplementedError`; the label described a repo with no runtime assets,
+not deliberately broken code.
+
 **2026-08-31** — repository lineage made explicit rather than erased. A clean
 slate was considered and rejected: Synthia *is* a fork of Celeste, and history
 that hid that would be dishonest. Three annotated tags now mark the
