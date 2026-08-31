@@ -26,3 +26,12 @@ self/
 
 # runtime logs
 *_desktop.log
+
+# Product payloads (2026-08-31). The Celeste 1.0 product repo carries its own
+# complete copies of all three; this research fork was duplicating ~1.4 GB of
+# binaries it never loads — its config points at the shared external drive and
+# ~/Dev/ai-lab/models instead. Kept on disk (untracked) so local packaging,
+# which copies these "if present", still works.
+models/
+embeddings/
+piper/
