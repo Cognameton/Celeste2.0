@@ -143,7 +143,7 @@ first commit of the experimental arm, returns 422 there. That is exactly where
 Made the remote reflect the project: `synthesis` set default and `main`
 dropped from the remote (lossless — `main` is an ancestor of `synthesis`),
 the launcher renamed `run_celeste.sh` → `run_synthia.sh`, and every hardcoded
-`/home/head-node/...` path in `model_runner.py` and `cli.py` replaced with
+`/home/<user>/...` path in `model_runner.py` and `cli.py` replaced with
 HOME-relative equivalents, which resolve identically here and stop publishing
 one machine's layout. No crippled "showcase" source ever existed — no stubs,
 no `NotImplementedError`; the label described a repo with no runtime assets,
