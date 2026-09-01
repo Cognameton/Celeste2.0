@@ -250,13 +250,121 @@ def test_pending_expires_across_processes(root: Path):
     assert "expired" in states, states
 
 
+# ---------------------------------------------------------------------------
+# Grounding a self-edit in her own action-outcome record (finding S3).
+#
+# The drift check originally demanded a self-edit's reason share a word with
+# recent CONVERSATION. An idle system has none, so the gate was unsatisfiable
+# in the mode she is almost always in: 464 proposals, 0 applied. These pin the
+# widened corpus — and pin what must stay OUT of it.
+# ---------------------------------------------------------------------------
+
+
+def _heartbeat(root: Path):
+    from heartbeat import Heartbeat, HeartbeatConfig
+    from self_state import SelfState
+    from user_model import UserModel
+    from wants import WantsStore
+
+    repo = Path(__file__).resolve().parent.parent
+    self_state = SelfState.initialize(root / "self", repo / "self_template")
+    ladder = TrustLadder(self_state.root / "governor", channels=CHANNELS)
+    gov = Governor(self_state.root, trust=ladder)
+    hb = Heartbeat(
+        llm=object(),
+        self_state=self_state,
+        wants=WantsStore(self_state.root / "wants"),
+        user_model=UserModel(self_state),
+        governor=gov,
+        config=HeartbeatConfig(enabled=False),
+        is_busy=lambda: False,
+        last_user_activity_ts=lambda: 0.0,
+        recent_turns=lambda n: [],
+    )
+    return hb, gov
+
+
+UNGROUNDED = "reason not grounded in recent context or own record"
+
+
+def test_corpus_is_never_empty_it_always_holds_tier_state(root: Path):
+    # Before anything has happened she still has something true to ground in:
+    # what tier each of her channels sits at. That is deliberate — an idle
+    # system with an empty corpus is back to the unsatisfiable gate of S3.
+    hb, _ = _heartbeat(root)
+    corpus = hb._outcome_context()
+    assert "self_edit" in corpus and "review" in corpus, corpus[:200]
+    # ...but no proposal history yet.
+    assert "rejected" not in corpus and "applied" not in corpus, corpus[:200]
+
+
+def test_rejections_and_reasons_enter_the_corpus(root: Path):
+    hb, gov = _heartbeat(root)
+    gov.submit(_edit(target="SOUL.md"), lambda: None)
+    corpus = hb._outcome_context()
+    for token in ("self_edit", "SOUL.md", "rejected", "allowed set", "v_protected_file"):
+        assert token in corpus, (token, corpus[:200])
+
+
+def test_tier_state_is_in_the_corpus(root: Path):
+    hb, gov = _heartbeat(root)
+    gov.trust.set_tier("want", "observe", reason="operator test", operator=True)
+    corpus = hb._outcome_context()
+    assert "want" in corpus and "observe" in corpus, corpus[:200]
+
+
+def test_her_own_prose_is_not_in_the_corpus(root: Path):
+    # The whole point: grounding in her own thoughts would rebuild the loop
+    # this exists to escape. Journal text must never appear.
+    hb, gov = _heartbeat(root)
+    hb.journal_path.parent.mkdir(parents=True, exist_ok=True)
+    with hb.journal_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": "2026-09-01T00:00:00Z", "importance": 0,
+                             "private_thought": "zebrafish contemplating aqueducts"}) + "\n")
+    gov.submit(_edit(target="SOUL.md"), lambda: None)
+    corpus = hb._outcome_context()
+    assert "zebrafish" not in corpus and "aqueduct" not in corpus, corpus[:200]
+
+
+def test_self_edit_grounded_only_in_the_record_now_passes(root: Path):
+    hb, gov = _heartbeat(root)
+    gov.submit(_edit(target="SOUL.md"), lambda: None)   # a real refusal on record
+    edit = {
+        "file": "AGENTS.md", "operation": "append_section", "heading": "Refusals",
+        "body": "My SOUL.md edits are refused by v_protected_file; stop proposing them.",
+        "reason": "The governor rejected a self_edit against SOUL.md by v_protected_file.",
+    }
+    # Idle, no conversation at all: the old behaviour refused this.
+    assert hb._drift_check(edit, "") == UNGROUNDED
+    # With her own record as corpus, the same edit is grounded.
+    assert hb._drift_check(edit, hb._outcome_context()) is None
+
+
+def test_ungrounded_reasons_are_still_refused(root: Path):
+    # Widening the corpus must not turn the gate off.
+    hb, gov = _heartbeat(root)
+    gov.submit(_edit(target="SOUL.md"), lambda: None)
+    edit = {
+        "file": "AGENTS.md", "operation": "append_section", "heading": "Unrelated",
+        "body": "Sudden thoughts about migratory zebrafish and aqueducts.",
+        "reason": "Zebrafish aqueduct migration patterns warrant deeper study.",
+    }
+    assert hb._drift_check(edit, hb._outcome_context()) == UNGROUNDED
+
+
 def main() -> int:
     print("trust ladder tests")
     for fn in (test_defaults, test_neutrality, test_observe, test_propose,
                test_promotion, test_promotion_needs_volume, test_revert_demotes,
                test_revert_blocks_promotion, test_ceiling, test_operator_override,
                test_emit_suppression, test_rejections_recorded,
-               test_pending_expires_across_processes):
+               test_pending_expires_across_processes,
+               test_corpus_is_never_empty_it_always_holds_tier_state,
+               test_rejections_and_reasons_enter_the_corpus,
+               test_tier_state_is_in_the_corpus,
+               test_her_own_prose_is_not_in_the_corpus,
+               test_self_edit_grounded_only_in_the_record_now_passes,
+               test_ungrounded_reasons_are_still_refused):
         case(fn)
     print(f"\n{len(_PASSED)} passed")
     return 0

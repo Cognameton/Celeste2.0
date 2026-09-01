@@ -99,14 +99,14 @@ def test_short_reason(root: Path):
 # 5. Extra validator rejection
 def test_extra_validator(root: Path):
     def fake_drift(proposal):
-        return "reason not grounded in recent context"
+        return "reason not grounded in recent context or own record"
 
     calls = []
     g = _gov(root)
     d = g.submit(_self_edit(), lambda: calls.append(1), extra_validators=(fake_drift,))
     assert d.verdict == "rejected", d
     assert d.validator == "fake_drift", d.validator
-    assert d.reason == "reason not grounded in recent context"
+    assert d.reason == "reason not grounded in recent context or own record"
     assert not calls
     assert g.ledger_tail()[-1]["validator"] == "fake_drift"
 

@@ -375,6 +375,72 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
 
     # ---- drift-check (governor extra validators) ----
 
+    def _outcome_context(self, limit: int = 60) -> str:
+        """What became of her proposals — facts, not her own prose.
+
+        Added 2026-09-01. The drift check below originally required a
+        self-edit's reason to share a word with recent *conversation*. While
+        idle there is no conversation, so the check was unsatisfiable in the
+        mode she is almost always in: 464 self-edits proposed over three days,
+        0 applied, 408 of them refused here (finding S3). The trust ladder
+        could therefore never promote self_edit, which is the one channel the
+        whole graduated-trust thesis is about.
+
+        The fix is not to weaken the gate but to widen what counts as
+        evidence. Her own action-outcome record is legitimate grounding: what
+        she proposed, what the governor did with it, and why. That is also the
+        operational definition of self-awareness IIDA (2026) gives third —
+        understanding the consequences of one's own actions.
+
+        Deliberately EXCLUDED: journal thoughts, want text, skill bodies. Those
+        are her own output, and grounding a self-edit in them would recreate
+        exactly the loop this is meant to escape — the internality failure in
+        Lindsey (2026) and the mechanism behind Nova 2.0's topic lock. See
+        docs/reading/2026-08-31-self-awareness-literature.md. What is included
+        is the deterministic half: verdicts, rejection reasons, validator
+        names, tier changes. Things the governor decided, not things she said.
+
+        Note the corpus is never empty: current tier state is always present,
+        so even on a first tick she has something true to ground in. An idle
+        system facing an empty corpus is back to the unsatisfiable gate this
+        replaces. The cost is that governance vocabulary — channel names, tier
+        names — is always groundable, which is a deliberate and narrow
+        loosening: a reason sharing a word with it is plausibly about her own
+        governance, which is the thing we want her able to reason about.
+        """
+        gov = getattr(self, "governor", None)
+        if gov is None:
+            return ""
+        parts: list[str] = []
+        try:
+            for entry in gov.ledger_tail(limit):
+                proposal = entry.get("proposal") or {}
+                parts.append(" ".join(str(x) for x in (
+                    proposal.get("channel", ""),
+                    proposal.get("action", ""),
+                    proposal.get("target", ""),
+                    entry.get("verdict", ""),
+                    entry.get("reason", ""),
+                    entry.get("validator", ""),
+                )))
+        except Exception:
+            logging.exception("Heartbeat could not read the governor ledger")
+        trust = getattr(gov, "trust", None)
+        if trust is not None:
+            try:
+                for event in trust.track.tail(limit):
+                    parts.append(" ".join(str(x) for x in (
+                        event.get("channel", ""),
+                        event.get("event", ""),
+                        event.get("target", ""),
+                        event.get("detail", ""),
+                    )))
+                for channel, entry in trust.tiers().items():
+                    parts.append(f"{channel} {entry.get('tier','')} {entry.get('reason','')}")
+            except Exception:
+                logging.exception("Heartbeat could not read the trust record")
+        return " ".join(parts)
+
     def _drift_validator(self, edit: dict[str, Any], recent_context: str):
         """Wrap _drift_check as a governor validator over this tick's context."""
         def drift_check(_proposal) -> str | None:
@@ -410,14 +476,15 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
         if len(reason) < MIN_REASON_LEN:
             return f"reason too short ({len(reason)} chars < {MIN_REASON_LEN})"
 
-        # Reason must share at least one non-trivial word with recent context.
+        # Reason must share at least one non-trivial word with the grounding
+        # corpus: recent conversation OR her own action-outcome record.
         reason_words = {
             w for w in re.sub(r"[^a-z0-9]+", " ", reason.lower()).split()
             if len(w) > 3 and w not in _REASON_STOPWORDS
         }
         context_words = set(re.sub(r"[^a-z0-9]+", " ", recent_context).split())
         if reason_words and not reason_words.intersection(context_words):
-            return "reason not grounded in recent context"
+            return "reason not grounded in recent context or own record"
 
         return None
 
@@ -451,7 +518,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
         }
         context_words = set(re.sub(r"[^a-z0-9]+", " ", recent_context).split())
         if reason_words and not reason_words.intersection(context_words):
-            return "reason not grounded in recent context"
+            return "reason not grounded in recent context or own record"
 
         return None
 
@@ -492,6 +559,11 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
 
         if result.private_thought:
             self._emit(f"Heartbeat • thought (importance {result.importance}): {result.private_thought[:120]}")
+
+        # Grounding corpus for the drift checks: conversation when there is
+        # any, plus what the governor actually did with her past proposals.
+        # Built once per tick — the ledger read is a whole-file read.
+        grounding = f"{recent_context} {self._outcome_context()}"
 
         gov = self.governor
 
@@ -575,7 +647,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
                 lambda f=filename, h=heading, b=body: self.self_state.append_section(
                     f, h, b, message=f"Heartbeat append: {h}",
                 ),
-                extra_validators=(self._drift_validator(edit, recent_context),),
+                extra_validators=(self._drift_validator(edit, grounding),),
             )
             if decision.applied:
                 entry["self_edits_applied"].append({
@@ -611,7 +683,7 @@ If there is nothing new to add to a list, leave it empty. Output only the JSON o
             decision = gov.submit(
                 proposal,
                 lambda spec=proposal_spec, s=slug: self._create_skill_draft(spec, s),
-                extra_validators=(self._skill_drift_validator(proposal_spec, recent_context),),
+                extra_validators=(self._skill_drift_validator(proposal_spec, grounding),),
             )
             if decision.applied:
                 entry["skills_proposed_applied"].append({"slug": slug})

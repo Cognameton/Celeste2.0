@@ -43,7 +43,7 @@ question, which is what makes a failure appearing in both interesting.
 |---|---|---|
 | **S1** | Phase 9/10 are behaviour-neutral in production, not just in tests | CONFIRMED |
 | **S2** | Repetition pattern in idle heartbeat thoughts | SUPERSEDED by S5 — now measured |
-| **S3** | The self-edit gate is structurally unsatisfiable while idle | CONFIRMED — 464 attempts, 0 applied |
+| **S3** | The self-edit gate is structurally unsatisfiable while idle | CONFIRMED — 464 attempts, 0 applied; **ADDRESSED 2026-09-01** |
 | **S4** | The governor counts no-op store calls as "applied", inflating trust evidence | CONFIRMED defect |
 | **S5** | Repetition measured at n=732: narrowing, not locked | OBSERVED, quantified |
 
@@ -214,10 +214,31 @@ mode the system is almost never in. Two consequences:
    modification — via opposite mechanisms.** One is a generative failure, the
    other a gate-calibration failure.
 
-**Open question Q3.** What *should* ground an idle self-edit? Her own journal,
-her wants, the ledger, the passage of time? The check assumes conversation is
-the only legitimate evidence, which is exactly the assumption a continuous
-being invalidates.
+**Open question Q3 — ANSWERED AND IMPLEMENTED 2026-09-01.** What should ground
+an idle self-edit is her own **action-outcome record**: what she proposed, what
+the governor did with it, and why. That is also IIDA's third criterion for
+self-awareness — understanding the consequences of one's own actions.
+
+`Heartbeat._outcome_context()` now builds a grounding corpus from the governor
+ledger (channel, action, target, verdict, rejection reason, validator), the
+trust track record, and current tier state. `_drift_check` grounds a reason in
+conversation **or** that record.
+
+Deliberately excluded: journal thoughts, want text, skill bodies. Those are her
+own output, and grounding a self-edit in them would rebuild exactly the loop
+this escapes — Lindsey's internality criterion, and the mechanism behind Nova's
+topic lock. What is included is the deterministic half: things the governor
+decided, not things she said.
+
+The corpus is never empty — tier state is always present — because an idle
+system facing an empty corpus is back to the unsatisfiable gate. The cost is
+that governance vocabulary is always groundable; a narrow, deliberate loosening.
+
+**Measured against her real record:** of the 437 self-edit reasons in the
+ledger, **277 (63%) become groundable**. That is the grounding barrier lifting,
+not 277 edits landing — they still face the heading, body-length and
+reason-length checks and the 6-hour per-file cooldown. Whether the trust ladder
+can now actually accrue applied self-edits is the live question.
 
 ---
 
