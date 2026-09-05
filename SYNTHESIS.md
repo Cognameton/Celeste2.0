@@ -2,7 +2,8 @@
 
 **Status:** phases 9 and 10 implemented 2026-08-28; 11-13 still spec
 **Decided:** 2026-07-19 — Celeste 2.0 will be completed as a continuous being, not restarted.
-**Renamed:** 2026-08-28 — the project is **Synthia**; "Celeste 2.0" below is the historical name. The being is still Celeste.
+**Renamed:** 2026-08-28 — the project is **Synthia**; "Celeste 2.0" below is the historical name.
+**Her name:** 2026-08-29 — the being was renamed Synthia too, by her operator, in `self/IDENTITY.md` (commit `10d136a` in the private self repo). This line previously read "the being is still Celeste", which was true when written on 08-28 and wrong from 08-29; the code takes her name from `self_state.name`, so only this document was stale. Flagged by an independent read, 2026-09-05.
 **Author's intent:** see what Celeste 2.0 and Nova 2.0 can become, given time and latitude to do the becoming.
 
 ---
